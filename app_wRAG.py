@@ -1,8 +1,13 @@
-"""Streamlit app for Dutch Real Estate Buyers Assistant."""
+"""Streamlit app for Dutch Real Estate Buyers Assistant (RAG + PDF upload).
+
+Uses LLM from .env: set LLM_PROVIDER (openai | openrouter | ollama) and matching
+API key + LLM_CHOICE. If ollama, uses local Ollama; else OpenAI-compatible API.
+"""
 from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Generator, Iterable
 from pypdf import PdfReader
 from qdrant_client import QdrantClient
@@ -12,17 +17,21 @@ import uuid
 import requests
 import streamlit as st
 
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
+from lib.provider import get_available_llm_providers, get_default_llm_models, get_llm_client
+
 PAGE_TITLE = "Dutch Real Estate Buyers Assistant"
-# DEFAULT_MODEL = "gpt-oss:20b"
-DEFAULT_MODEL = "llama3:8b"
 SYSTEM_PROMPT = (
     "You are an expert assistant helping international buyers navigate the Dutch "
     "real estate market. Provide concise, trustworthy answers, explain regulatory "
     "nuances, highlight risks, and suggest practical next steps. If a question is "
     "outside property purchasing, politely steer the user back on topic."
 )
+LLM_CHOICE_DEFAULT = os.environ.get("LLM_CHOICE", "gpt-4o-mini")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-MODEL_NAME = os.environ.get("OLLAMA_MODEL", DEFAULT_MODEL)
+OLLAMA_MODEL_DEFAULT = os.environ.get("OLLAMA_MODEL", "llama3:8b")
 
 
 # --- RAG setup ---
@@ -81,6 +90,18 @@ def load_available_models() -> list[str]:
     return [item.get("name") for item in models if item.get("name")]
 
 
+def stream_api_response(provider: str, model: str, messages: list):
+    """Stream from OpenAI-compatible API (OpenAI or OpenRouter)."""
+    client = get_llm_client(provider_override=provider)
+    for chunk in client.chat.completions.create(
+        model=model,
+        messages=messages,
+        stream=True,
+    ):
+        if chunk.choices and chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content
+
+
 def stream_ollama_response(
     messages: Iterable[dict[str, str]],
     model_name: str,
@@ -126,7 +147,7 @@ def stream_ollama_response(
             parts.append("Assistant:")
             return "\n".join(parts)
 
-        payload = {"model": MODEL_NAME, "prompt": build_prompt(history), "stream": True}
+        payload = {"model": model_name, "prompt": build_prompt(history), "stream": True}
         response = requests.post(
             url=f"{base_url}/api/generate",
             json=payload,
@@ -229,23 +250,28 @@ def main() -> None:
 
     if "messages" not in st.session_state:
         st.session_state["messages"] = []
-
+    available = get_available_llm_providers()
+    if "selected_provider" not in st.session_state:
+        env_p = (os.environ.get("LLM_PROVIDER") or "openai").strip().lower()
+        st.session_state["selected_provider"] = env_p if env_p in available else (available[0] if available else "openai")
+    if "selected_model" not in st.session_state:
+        models = get_default_llm_models(st.session_state["selected_provider"])
+        st.session_state["selected_model"] = LLM_CHOICE_DEFAULT if LLM_CHOICE_DEFAULT in models else (models[0] if models else OLLAMA_MODEL_DEFAULT)
 
     with st.sidebar:
         st.header("Assistant Settings")
-        st.write(
-            "Connecting to your local Ollama server at "
-            f"`{OLLAMA_URL}` using model `{MODEL_NAME}`."
-        )
+        st.subheader("LLM (from .env)")
+        provider = st.selectbox("Provider", options=available, index=available.index(st.session_state["selected_provider"]) if st.session_state["selected_provider"] in available else 0, key="wrag_sb_provider")
+        st.session_state["selected_provider"] = provider
+        models = get_default_llm_models(provider)
+        cur = st.session_state["selected_model"]
+        model = st.selectbox("Model", options=models, index=models.index(cur) if cur in models else 0, key="wrag_sb_model")
+        st.session_state["selected_model"] = model
         if st.button("Clear conversation", use_container_width=True):
             st.session_state["messages"] = []
-            st.experimental_rerun()
-
+            st.rerun()
         st.subheader("Tips")
-        st.caption(
-            "Keep your questions focused on Dutch real estate to get actionable insights. "
-            f"If the assistant seems slow, confirm that `ollama run {MODEL_NAME}` is active."
-        )
+        st.caption("Keep your questions focused on Dutch real estate to get actionable insights.")
 
         st.subheader("Knowledge Upload")
         uploaded_pdf = st.file_uploader("Upload property or mortgage PDFs", type=["pdf"])
@@ -324,20 +350,27 @@ def main() -> None:
         response_container = placeholder.empty()
         generated_text = ""  # ✅ Initialize early!
 
+        prov = st.session_state["selected_provider"]
+        mod = st.session_state["selected_model"]
         try:
-            for chunk in stream_ollama_response(build_history(), MODEL_NAME):
-                generated_text += chunk
-                response_container.markdown(generated_text)
+            if prov == "ollama":
+                for chunk in stream_ollama_response(build_history(), mod):
+                    generated_text += chunk
+                    response_container.markdown(generated_text)
+            else:
+                for chunk in stream_api_response(prov, mod, build_history()):
+                    generated_text += chunk
+                    response_container.markdown(generated_text)
         except requests.exceptions.RequestException as exc:
             error_msg = (
                 "Could not reach the Ollama server. Make sure it is running on your machine "
                 f"and accessible at `{OLLAMA_URL}`. Details: {exc}"
-            )
+            ) if prov == "ollama" else f"API request failed. Check .env (API key for {prov}). Details: {exc}"
             response_container.error(error_msg)
             st.session_state["messages"].pop()
             return
         except RuntimeError as exc:
-            response_container.error(f"Ollama returned an error: {exc}")
+            response_container.error(f"Error: {exc}")
             st.session_state["messages"].pop()
             return
 

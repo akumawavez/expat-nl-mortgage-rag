@@ -1,224 +1,299 @@
-"""Streamlit app for Dutch Real Estate Buyers Assistant."""
+"""
+Phase 1 consolidated app: Chat (RAG + Tools Used + citations), Mortgage Calculator, Observability.
+
+Single entry point: streamlit run app.py
+Run scripts/ingest_docs.py first to populate Qdrant. Sidebar: provider/model from .env, web search toggle, hybrid retrieval.
+"""
 from __future__ import annotations
 
 import json
 import os
-from typing import Generator, Iterable
+from pathlib import Path
 
-import requests
+import dotenv
+dotenv.load_dotenv(Path(__file__).resolve().parent / ".env")
+
 import streamlit as st
+from qdrant_client import QdrantClient
+from qdrant_client.models import VectorParams, Distance
 
-PAGE_TITLE = "Dutch Real Estate Buyers Assistant"
-# DEFAULT_MODEL = "gpt-oss:20b"
-DEFAULT_MODEL = "llama3:8b"
-SYSTEM_PROMPT = (
-    "You are an expert assistant helping international buyers navigate the Dutch "
-    "real estate market. Provide concise, trustworthy answers, explain regulatory "
-    "nuances, highlight risks, and suggest practical next steps. If a question is "
-    "outside property purchasing, politely steer the user back on topic."
+from lib.provider import (
+    get_llm_client,
+    get_embedding_client,
+    get_available_llm_providers,
+    get_default_llm_models,
 )
+from lib.retrieval import vector_search, hybrid_retrieve
+
+# -----------------------------------------------------------------------------
+# Config
+# -----------------------------------------------------------------------------
+PAGE_TITLE = "Expat NL Mortgage Assistant (Phase 1)"
+QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
+QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "property_docs")
+MAX_SEARCH_RESULTS = int(os.environ.get("MAX_SEARCH_RESULTS", "10"))
+VECTOR_DIMENSION = int(os.environ.get("VECTOR_DIMENSION", "1536"))
+EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
+LLM_CHOICE_DEFAULT = os.environ.get("LLM_CHOICE", "gpt-4o-mini")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-MODEL_NAME = os.environ.get("OLLAMA_MODEL", DEFAULT_MODEL)
+
+SYSTEM_PROMPT = (
+    "You are an expert assistant helping expats and international buyers with Dutch mortgages "
+    "and property in the Netherlands. Use the provided context from documents to answer. "
+    "If the context does not contain enough information, say so. Keep answers concise and actionable. "
+    "When web search results are provided, you may use them to supplement the document context."
+)
 
 
-class ModelNotFoundError(RuntimeError):
-    """Raised when the requested Ollama model cannot be found."""
+@st.cache_resource
+def get_qdrant() -> QdrantClient:
+    return QdrantClient(url=QDRANT_URL)
 
 
-def _extract_error_message(response: requests.Response) -> str | None:
-    """Return a human-readable error message from an Ollama response."""
+def get_embedding(client, text: str) -> list[float]:
+    resp = client.embeddings.create(input=[text], model=EMBEDDING_MODEL)
+    return resp.data[0].embedding
+
+
+def _tavily_search(query: str, max_results: int = 5) -> tuple[str, list[dict]]:
+    """Return (context_string, tool_calls_for_ui). If no key or error, returns ('', [])."""
+    if not os.environ.get("TAVILY_API_KEY"):
+        return "", []
     try:
-        payload = response.json()
-    except ValueError:
-        text = response.text.strip()
-        return text or None
-    if isinstance(payload, dict):
-        message = payload.get("error") or payload.get("message")
-        if message:
-            return str(message)
-    return None
+        from tavily import TavilyClient
+        client = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
+        response = client.search(query, max_results=max_results)
+        results = getattr(response, "results", response) if hasattr(response, "results") else []
+        if isinstance(results, list):
+            parts = []
+            for r in results:
+                title = r.get("title", "")
+                url = r.get("url", "")
+                content = r.get("content", "")
+                if content:
+                    parts.append(f"[{title}]({url})\n{content}")
+            return "\n\n".join(parts), [{"tool": "tavily_search", "args": {"query": query[:80]}}]
+    except Exception:
+        pass
+    return "", []
 
 
-def load_available_models() -> list[str]:
-    """Fetch the list of locally pulled Ollama models."""
-    try:
-        response = requests.get(
-            f"{OLLAMA_URL.rstrip('/')}/api/tags",
-            timeout=10,
-        )
-        response.raise_for_status()
-    except requests.RequestException:
-        return []
-
-    try:
-        payload = response.json()
-    except ValueError:
-        return []
-
-    models = payload.get("models", [])
-    return [item.get("name") for item in models if item.get("name")]
+def _format_tools_used(tool_calls: list[dict]) -> str:
+    lines = []
+    for i, tc in enumerate(tool_calls, 1):
+        name = tc.get("tool", "?")
+        args = tc.get("args", {})
+        args_str = ", ".join(f"{k}={repr(v)}" for k, v in args.items())
+        lines.append(f"  {i}. {name} ({args_str})")
+    return "🛠 **Tools Used:**\n" + "\n".join(lines) if lines else ""
 
 
-def stream_ollama_response(
-    messages: Iterable[dict[str, str]],
-    model_name: str,
-) -> Generator[str, None, None]:
-    """Stream a response from the local Ollama server."""
-
-    history = list(messages)
-
-    def _stream_chat() -> Generator[str, None, None]:
-        payload = {"model": model_name, "messages": history, "stream": True}
-        response = requests.post(
-            url=f"{base_url}/api/chat",
-            json=payload,
-            stream=True,
-            timeout=600,
-        )
-
-        if response.status_code == 404:
-            response.close()
-            raise FileNotFoundError("chat-endpoint-not-available")
-
-        response.raise_for_status()
-
-        for line in response.iter_lines(decode_unicode=True):
-            if not line:
-                continue
-            data = json.loads(line)
-            if "error" in data:
-                raise RuntimeError(data["error"])
-            if data.get("done"):
-                break
-            chunk = data.get("message", {}).get("content", "")
-            if chunk:
-                yield chunk
-
-    def _stream_generate() -> Generator[str, None, None]:
-        def build_prompt(history: Iterable[dict[str, str]]) -> str:
-            parts: list[str] = []
-            for item in history:
-                role = item.get("role", "user").capitalize()
-                content = item.get("content", "")
-                parts.append(f"{role}: {content}")
-            parts.append("Assistant:")
-            return "\n".join(parts)
-
-        payload = {"model": MODEL_NAME, "prompt": build_prompt(history), "stream": True}
-        response = requests.post(
-            url=f"{base_url}/api/generate",
-            json=payload,
-            stream=True,
-            timeout=600,
-        )
-        response.raise_for_status()
-
-        for line in response.iter_lines(decode_unicode=True):
-            if not line:
-                continue
-            data = json.loads(line)
-            if "error" in data:
-                raise RuntimeError(data["error"])
-            if data.get("done"):
-                break
-            chunk = data.get("response", "")
-            if chunk:
-                yield chunk
-
-    base_url = OLLAMA_URL.rstrip("/")
-
-    try:
-        yield from _stream_chat()
-    except FileNotFoundError:
-        yield from _stream_generate()
+def _stream_api(provider: str, model: str, messages: list[dict], placeholder, prefix: str = "") -> str:
+    client = get_llm_client(provider_override=provider)
+    full = ""
+    for chunk in client.chat.completions.create(model=model, messages=messages, stream=True):
+        if chunk.choices and chunk.choices[0].delta.content:
+            full += chunk.choices[0].delta.content
+            placeholder.markdown(prefix + full + "▌")
+    placeholder.markdown(prefix + full)
+    return full
 
 
-def render_hero_section() -> None:
-    col_left, col_right = st.columns([2, 1])
-    with col_left:
-        st.title(PAGE_TITLE)
-        st.markdown(
-            """
-            Helping expats and locals confidently navigate property purchases in the Netherlands.
-            
-            - Decode bidding strategies, mortgage steps, and legal requirements
-            - Compare neighborhoods with livability, commute, and pricing insights
-            - Gather due diligence tips before you sign or schedule a viewing
-            """
-        )
-        st.markdown(
-            "<p style='font-size:1rem; color:#4B5563;'>Ready to explore the Dutch housing market? Ask a question below.</p>",
-            unsafe_allow_html=True,
-        )
-    with col_right:
-        st.markdown(
-            "<div style='background:#F1F5F9;border-radius:18px;padding:24px;text-align:center;'>"
-            "<h3 style='margin-bottom:8px;'>Market Snapshot</h3>"
-            "<p style='margin:0;color:#475569;'>Use the assistant to estimate budgets, prepare for bidding rounds, and clarify municipal rules.</p>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
+def _stream_ollama(model: str, messages: list[dict], placeholder, prefix: str = "") -> str:
+    import requests
+    base = OLLAMA_URL.rstrip("/")
+    payload = {"model": model, "messages": messages, "stream": True}
+    full = ""
+    r = requests.post(f"{base}/api/chat", json=payload, stream=True, timeout=600)
+    r.raise_for_status()
+    for line in r.iter_lines(decode_unicode=True):
+        if not line:
+            continue
+        data = json.loads(line)
+        if data.get("message", {}).get("content"):
+            full += data["message"]["content"]
+            placeholder.markdown(prefix + full + "▌")
+    placeholder.markdown(prefix + full)
+    return full
 
 
-def build_history() -> list[dict[str, str]]:
-    history = [{"role": "system", "content": SYSTEM_PROMPT}]
-    history.extend(st.session_state.get("messages", []))
-    return history
+# ---------- Mortgage calculator (ING-style) ----------
+ENERGIELABELS = [
+    "A++++ (met EPG)",
+    "A+++",
+    "A++",
+    "A+",
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "Geen label mogelijk/bekend",
+]
 
 
+def _render_calculator_tab() -> None:
+    st.subheader("Mortgage calculator (ING-style)")
+    st.caption("Bid, eigen inleg, type woning, energielabel → Bruto maandlasten, Hypotheek, Kosten koper")
+    bid = st.number_input("Bod / aankoopprijs (€)", min_value=50000, max_value=2_000_000, value=350000, step=10000)
+    eigen_inleg = st.number_input("Eigen inleg (€)", min_value=0, max_value=bid, value=35000, step=5000)
+    hypotheek = bid - eigen_inleg
+    type_woning = st.selectbox("Type woning", ["Bestaande koopwoning", "Nieuwbouw", "Bouwkavel"])
+    energielabel = st.selectbox("Energielabel", ENERGIELABELS)
+    # Simplified: no real ING formula; show placeholder outputs
+    st.divider()
+    st.metric("Hypotheek", f"€ {hypotheek:,}")
+    # Bruto maandlasten: rough proxy (e.g. ~0.05/12 of hypotheek for interest-only idea; not real)
+    maandlast_approx = round(hypotheek * 0.0045, 2)  # placeholder
+    st.metric("Bruto maandlasten (indicatief)", f"€ {maandlast_approx:,.2f}")
+    kk = round(bid * 0.06, 0)  # ~6% costs koper placeholder
+    st.metric("Kosten koper (indicatief)", f"€ {kk:,.0f}")
+    st.caption("Indicative values only; consult a mortgage advisor for real numbers.")
+
+
+# ---------- Observability tab ----------
+def _render_observability_tab() -> None:
+    st.subheader("Observability")
+    st.caption("Token consumption, price estimation, and link to Langfuse when configured.")
+    langfuse_host = os.environ.get("LANGFUSE_HOST", "").strip() or os.environ.get("LANGFUSE_URL", "").strip()
+    if langfuse_host:
+        st.markdown(f"**Langfuse:** [Open dashboard]({langfuse_host})")
+    else:
+        st.info("Set LANGFUSE_HOST or LANGFUSE_URL in .env to link to Langfuse.")
+    st.metric("Token / price tracking", "Via Langfuse callback when enabled")
+    st.caption("Phase 1: basic link; Phase 3 adds Retrieval quality, Response quality, Drift indicators.")
+
+
+# ---------- Main ----------
 def main() -> None:
     st.set_page_config(page_title=PAGE_TITLE, page_icon="🏠", layout="wide")
 
     if "messages" not in st.session_state:
         st.session_state["messages"] = []
+    available = get_available_llm_providers()
+    if "selected_provider" not in st.session_state:
+        env_p = (os.environ.get("LLM_PROVIDER") or "openai").strip().lower()
+        st.session_state["selected_provider"] = env_p if env_p in available else (available[0] if available else "openai")
+    if "selected_model" not in st.session_state:
+        models = get_default_llm_models(st.session_state["selected_provider"])
+        st.session_state["selected_model"] = LLM_CHOICE_DEFAULT if LLM_CHOICE_DEFAULT in models else (models[0] if models else LLM_CHOICE_DEFAULT)
+    if "use_hybrid" not in st.session_state:
+        st.session_state["use_hybrid"] = True
+    if "web_search" not in st.session_state:
+        st.session_state["web_search"] = False
 
     with st.sidebar:
-        st.header("Assistant Settings")
-        st.write(
-            "Connecting to your local Ollama server at "
-            f"`{OLLAMA_URL}` using model `{MODEL_NAME}`."
+        st.header("Settings")
+        st.subheader("LLM (from .env)")
+        provider = st.selectbox(
+            "Provider",
+            options=available,
+            index=available.index(st.session_state["selected_provider"]) if st.session_state["selected_provider"] in available else 0,
+            key="sb_provider",
         )
+        st.session_state["selected_provider"] = provider
+        models = get_default_llm_models(provider)
+        cur = st.session_state["selected_model"]
+        model = st.selectbox("Model", options=models, index=models.index(cur) if cur in models else 0, key="sb_model")
+        st.session_state["selected_model"] = model
+        st.session_state["use_hybrid"] = st.checkbox("Use hybrid search (RRF)", value=st.session_state["use_hybrid"], key="use_hybrid")
+        top_k = st.slider("Retrieval chunks", 3, 20, MAX_SEARCH_RESULTS, key="top_k")
+        st.session_state["web_search"] = st.checkbox("Web search (Tavily)", value=st.session_state["web_search"], key="web_search")
         if st.button("Clear conversation", use_container_width=True):
             st.session_state["messages"] = []
-            st.experimental_rerun()
+            st.rerun()
 
-        st.subheader("Tips")
-        st.caption(
-            "Keep your questions focused on Dutch real estate to get actionable insights. "
-            f"If the assistant seems slow, confirm that `ollama run {MODEL_NAME}` is active."
-        )
+    tab_chat, tab_calc, tab_obs = st.tabs(["Chat", "Mortgage Calculator", "Observability"])
+    with tab_calc:
+        _render_calculator_tab()
+    with tab_obs:
+        _render_observability_tab()
 
-    render_hero_section()
+    with tab_chat:
+        st.title(PAGE_TITLE)
+        st.caption("Ask about Dutch mortgages, tax, housing. Tools Used and sources are shown per turn.")
 
-    for message in st.session_state["messages"]:
-        st.chat_message(message["role"]).write(message["content"])
+        for msg in st.session_state["messages"]:
+            with st.chat_message(msg["role"]):
+                if msg["role"] == "assistant" and msg.get("tools_used"):
+                    st.markdown(_format_tools_used(msg["tools_used"]) + "\n\n🤖 **Assistant:**\n\n")
+                st.write(msg["content"])
+                if msg["role"] == "assistant" and msg.get("sources"):
+                    with st.expander("Sources"):
+                        for s in msg["sources"]:
+                            src = s.get("source", "?")
+                            st.caption(f"**{src}**")
+                            st.text(s.get("text", "")[:500] + ("..." if len(s.get("text", "")) > 500 else ""))
 
-    if prompt := st.chat_input("Ask about Dutch property buying, financing, or neighborhoods..."):
-        st.session_state["messages"].append({"role": "user", "content": prompt})
-        st.chat_message("user").write(prompt)
+        if prompt := st.chat_input("Ask about Dutch mortgages, tax, or housing..."):
+            st.session_state["messages"].append({"role": "user", "content": prompt})
+            st.chat_message("user").write(prompt)
 
-        placeholder = st.chat_message("assistant")
-        response_container = placeholder.empty()
-        generated_text = ""
+            # Retrieval
+            try:
+                embedding_client = get_embedding_client()
+            except RuntimeError as e:
+                st.chat_message("assistant").error(str(e))
+                st.session_state["messages"].pop()
+                st.stop()
+            qdrant = get_qdrant()
+            query_embedding = get_embedding(embedding_client, prompt)
+            tool_calls: list[dict] = []
+            chunks: list[dict] = []
+            try:
+                if st.session_state["use_hybrid"]:
+                    chunks, tool_calls = hybrid_retrieve(
+                        qdrant, QDRANT_COLLECTION, query_embedding, prompt, limit=top_k
+                    )
+                else:
+                    chunks, tool_calls = vector_search(
+                        qdrant, QDRANT_COLLECTION, query_embedding, limit=top_k, query_text=prompt
+                    )
+            except Exception:
+                chunks, tool_calls = [], [{"tool": "vector_search", "args": {"query": prompt[:80], "limit": top_k}}]
+            context = "\n\n---\n\n".join(c.get("text", "") for c in chunks) if chunks else ""
 
-        try:
-            for chunk in stream_ollama_response(build_history(), MODEL_NAME):
-                generated_text += chunk
-                response_container.markdown(generated_text)
-        except requests.exceptions.RequestException as exc:
-            error_msg = (
-                "Could not reach the Ollama server. Make sure it is running on your machine "
-                f"and accessible at `{OLLAMA_URL}`. Details: {exc}"
-            )
-            response_container.error(error_msg)
-            st.session_state["messages"].pop()
-            return
-        except RuntimeError as exc:  # raised when Ollama returns an error payload
-            response_container.error(f"Ollama returned an error: {exc}")
-            st.session_state["messages"].pop()
-            return
+            # Optional Tavily
+            if st.session_state["web_search"]:
+                web_ctx, web_tools = _tavily_search(prompt)
+                if web_tools:
+                    tool_calls.extend(web_tools)
+                if web_ctx:
+                    context = (context + "\n\n--- Web search ---\n\n" + web_ctx) if context else web_ctx
 
-        st.session_state["messages"].append({"role": "assistant", "content": generated_text})
+            if context:
+                user_content = "Use the following context to answer. If not in context, say so.\n\nContext:\n" + context + "\n\nQuestion: " + prompt
+            else:
+                user_content = "No document context found. Answer from general knowledge and suggest loading documents (python scripts/ingest_docs.py).\n\nQuestion: " + prompt
+
+            messages_for_llm = [{"role": "system", "content": SYSTEM_PROMPT}]
+            for m in st.session_state["messages"][:-1]:
+                messages_for_llm.append({"role": m["role"], "content": m["content"]})
+            messages_for_llm.append({"role": "user", "content": user_content})
+
+            placeholder = st.chat_message("assistant").empty()
+            prefix = (_format_tools_used(tool_calls) + "\n\n🤖 **Assistant:**\n\n") if tool_calls else ""
+            try:
+                prov = st.session_state["selected_provider"]
+                mod = st.session_state["selected_model"]
+                if prov == "ollama":
+                    answer = _stream_ollama(mod, messages_for_llm, placeholder, prefix=prefix)
+                else:
+                    answer = _stream_api(prov, mod, messages_for_llm, placeholder, prefix=prefix)
+            except Exception as e:
+                placeholder.error(str(e))
+                st.session_state["messages"].pop()
+                st.stop()
+
+            st.session_state["messages"].append({
+                "role": "assistant",
+                "content": answer,
+                "tools_used": tool_calls,
+                "sources": chunks,
+            })
+            st.rerun()
 
 
 if __name__ == "__main__":
