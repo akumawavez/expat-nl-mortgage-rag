@@ -1,27 +1,31 @@
 # Expat NL Mortgage RAG
 
-RAG-based assistant for Dutch mortgages and property (expat-focused), with optional knowledge graph, location tools, and multi-phase roadmap.
+RAG-based assistant for Dutch mortgages and property (expat-focused), with knowledge graph (Phase 2), location tools, and a four-phase roadmap (PHASES.md).
 
-## Quick start (current state – Phase 1 foundation)
+## Chat response format
+
+Each turn shows **Tools Used** (e.g. `vector_search`, `hybrid_retrieve`, `tavily_search`) and the **Assistant** reply; **citations** are in an expandable Sources panel. See PHASES.md for the format in Phase 1–4.
+
+## Quick start
 
 From the project root:
 
 ```bash
 # 1. Environment
-cp .env.example .env   # or create .env with QDRANT_*, LLM/embedding API keys
+cp .env.example .env   # set QDRANT_*, LLM/embedding API keys, optional TAVILY_API_KEY
 python -m venv venv
-venv\Scripts\activate   # Windows; use source venv/bin/activate on Linux/macOS
+venv\Scripts\activate   # Windows; source venv/bin/activate on Linux/macOS
 pip install -r requirements.txt
 
 # 2. Start Qdrant (e.g. Docker), then ingest
 python scripts/ingest_docs.py
 python scripts/test_ingestion.py   # expect RESULT: PASS
 
-# 3. Run app
-streamlit run app_phase1.py
+# 3. Run app (single entry point)
+streamlit run app.py
 ```
 
-Use the chat to ask about Dutch mortgages, tax, or housing; optionally upload PDFs in the sidebar (upsert).
+**app.py** includes: **Chat** (RAG, hybrid retrieval, web search toggle, Tools Used + citations), **Mortgage Calculator**, **Knowledge Graph** (PyVis), **Location** (nearby_places, OSRM, area_safety), **Sun** (Phase 3 placeholder), **Observability**, **Agents** (Phase 4 placeholder).
 
 ## Run steps per phase
 
@@ -36,13 +40,20 @@ See **[PHASES.md – Code run steps at end of each phase](PHASES.md#code-run-ste
 
 ## Project layout
 
-- `app_phase1.py` – Phase 1 RAG chat (single app entry point may become `app.py` in Phase 1).
+- **`app.py`** – Single entry point: Chat (RAG, Tools Used, citations), Calculator, KG, Location, Sun, Observability, Agents.
+- `app_phase1.py` – Phase 1 RAG chat (alternative; PDF upload in sidebar).
 - `scripts/ingest_docs.py` – Ingest PDFs into Qdrant (default: full replace; `--semantic` for agentic chunking).
-- `scripts/test_ingestion.py` – Verify Qdrant and retrieval (Phase 1).
-- `scripts/test_phase2.py` – Phase 2 checks (Neo4j, graph write/content when implemented).
+- `scripts/test_ingestion.py` – Verify Qdrant and retrieval.
+- `scripts/test_phase2.py` – Phase 2: Neo4j, graph extraction, PyVis.
+- `scripts/run_ragas.py` – Phase 3 RAG evals (stub).
+- `lib/retrieval.py` – vector_search, hybrid_retrieve (RRF).
 - `lib/chunking.py` – Chunking (simple or semantic).
-- `lib/provider.py` – LLM/embedding client (OpenAI, OpenRouter).
-- `PHASES.md` – Four-phase plan, completion tests, and **code run steps at end of each phase**.
+- `lib/provider.py` – LLM/embedding client (OpenAI, OpenRouter, Ollama).
+- `lib/graph_kg.py` – KG extraction and PyVis (Phase 2).
+- `lib/location.py` – nearby_places, osrm_commute, area_safety (Phase 2).
+- `tests/` – pytest (retrieval, calculator, chunking).
+- `DEPLOYMENT.md`, `.env.example` – Deployment and env vars.
+- **`PHASES.md`** – Four-phase plan, completion tests, and **code run steps at end of each phase**.
 
 ## Docs
 

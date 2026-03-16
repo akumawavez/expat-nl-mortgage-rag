@@ -30,5 +30,7 @@ openai>=1.0.0
 # Phase 1: Web search (optional)
 tavily-python>=0.3.0
 
-# Phase 2: Knowledge Graph (Neo4j)
+# Phase 2: Knowledge Graph (Neo4j + PyVis)
 neo4j>=5.0.0
+pyvis>=0.3.0
+networkx>=3.0

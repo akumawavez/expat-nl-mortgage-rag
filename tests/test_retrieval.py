@@ -9,8 +9,8 @@ def test_rrf_merge_basic():
     merged = _rrf_merge([list_a, list_b], k=60)
     assert len(merged) == 3
     assert set(merged) == {"id1", "id2", "id3"}
-    # id2 appears high in both -> should rank first
-    assert merged[0] == "id2"
+    # id1 and id2 both rank high in both lists -> top two (order may tie)
+    assert set(merged[:2]) == {"id1", "id2"}
 
 
 def test_rrf_merge_respects_k():

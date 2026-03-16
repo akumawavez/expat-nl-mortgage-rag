@@ -24,6 +24,8 @@ from lib.provider import (
     get_default_llm_models,
 )
 from lib.retrieval import vector_search, hybrid_retrieve
+from lib.graph_kg import build_kg_from_text
+from lib.location import nearby_places, osrm_commute, area_safety
 
 # -----------------------------------------------------------------------------
 # Config
@@ -153,6 +155,66 @@ def _render_calculator_tab() -> None:
     st.caption("Indicative values only; consult a mortgage advisor for real numbers.")
 
 
+# ---------- Knowledge Graph tab (Phase 2) ----------
+def _render_kg_tab() -> None:
+    st.subheader("Knowledge Graph")
+    st.caption("Extract entities and relations from text; visualize with PyVis.")
+    text = st.text_area("Text to build graph from", value=(
+        "Mortgage interest deduction (hypotheekrenteaftrek) applies to owner-occupied homes. "
+        "The Tax Authority (Belastingdienst) oversees tax returns. NHG provides guarantees for mortgages."
+    ), height=120, key="kg_text")
+    if st.button("Build graph", key="kg_build"):
+        with st.spinner("Building graph..."):
+            html = build_kg_from_text(text)
+        st.components.v1.html(html, height=500, scrolling=True)
+    else:
+        html = build_kg_from_text("")
+        st.components.v1.html(html, height=500, scrolling=True)
+
+
+# ---------- Location tab (Phase 2) ----------
+def _render_location_tab() -> None:
+    st.subheader("Location & commute")
+    st.caption("Nearby places (Nominatim + Overpass), OSRM commute, area safety (placeholder).")
+    addr = st.text_input("Address (e.g. Amsterdam Centrum)", value="Amsterdam Centrum", key="loc_addr")
+    if st.button("Nearby places", key="np_btn"):
+        results, _ = nearby_places(addr)
+        if results:
+            r = results[0]
+            st.write(f"**{addr}** → lat={r['lat']:.4f}, lon={r['lon']:.4f}")
+            for p in r.get("pois", [])[:15]:
+                st.caption(f"- {p.get('name', '?')} ({p.get('type', '')})")
+        else:
+            st.warning("Could not geocode address.")
+    dest = st.text_input("Commute destination", value="Schiphol Airport", key="loc_dest")
+    if st.button("Commute time (OSRM)", key="osrm_btn"):
+        res, _ = osrm_commute(addr, dest)
+        if res:
+            st.metric("Duration", f"{res['duration_min']} min")
+            st.metric("Distance", f"{res['distance_km']} km")
+        else:
+            st.warning("Could not compute route.")
+    area = st.text_input("Area for safety (placeholder)", value="Amsterdam", key="area_name")
+    if st.button("Area safety", key="safety_btn"):
+        res, _ = area_safety(area)
+        if res:
+            st.json(res)
+
+
+# ---------- Phase 4 placeholder (Multi-agent, A2UI, MCP) ----------
+def _render_agents_tab() -> None:
+    st.subheader("Agents (Phase 4)")
+    st.caption("Multi-agent: orchestrator + specialists (retrieval, location, calculator). A2UI directives, MCP tools.")
+    st.info("Phase 4: LangGraph/LangChain multi-agent routing, A2UI schema + renderer, MCP client. See PHASES.md.")
+
+# ---------- Sun-orientation tab (Phase 3) ----------
+def _render_sun_tab() -> None:
+    st.subheader("Sun orientation")
+    st.caption("Phase 3: Sun path vs apartment; orientation and date slider (SVG/HTML).")
+    date = st.date_input("Date", key="sun_date")
+    orientation = st.selectbox("Orientation", ["South", "SW", "West", "NW", "North", "NE", "East", "SE"], key="sun_orient")
+    st.info(f"Sun path for {date} facing {orientation}. Full SVG widget in Phase 3.")
+
 # ---------- Observability tab ----------
 def _render_observability_tab() -> None:
     st.subheader("Observability")
@@ -163,7 +225,12 @@ def _render_observability_tab() -> None:
     else:
         st.info("Set LANGFUSE_HOST or LANGFUSE_URL in .env to link to Langfuse.")
     st.metric("Token / price tracking", "Via Langfuse callback when enabled")
-    st.caption("Phase 1: basic link; Phase 3 adds Retrieval quality, Response quality, Drift indicators.")
+    with st.expander("Retrieval quality (Phase 3)"):
+        st.caption("RAGAS/Phoenix or Langfuse retrieval metrics.")
+    with st.expander("Response quality (Phase 3)"):
+        st.caption("Response quality metrics.")
+    with st.expander("Drift indicators (Phase 3)"):
+        st.caption("Input/output distributions, quality trends.")
 
 
 # ---------- Main ----------
@@ -205,11 +272,21 @@ def main() -> None:
             st.session_state["messages"] = []
             st.rerun()
 
-    tab_chat, tab_calc, tab_obs = st.tabs(["Chat", "Mortgage Calculator", "Observability"])
+    tab_chat, tab_calc, tab_kg, tab_loc, tab_sun, tab_obs, tab_agents = st.tabs(
+        ["Chat", "Mortgage Calculator", "Knowledge Graph", "Location", "Sun", "Observability", "Agents (P4)"]
+    )
     with tab_calc:
         _render_calculator_tab()
+    with tab_kg:
+        _render_kg_tab()
+    with tab_loc:
+        _render_location_tab()
+    with tab_sun:
+        _render_sun_tab()
     with tab_obs:
         _render_observability_tab()
+    with tab_agents:
+        _render_agents_tab()
 
     with tab_chat:
         st.title(PAGE_TITLE)
