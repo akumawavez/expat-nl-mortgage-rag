@@ -50,7 +50,7 @@ def main() -> None:
         print("    OK – Qdrant is reachable.")
     except Exception as e:
         print(f"    FAIL – Cannot connect to Qdrant: {e}")
-        print("    → Start Qdrant (e.g. Docker) and ensure QDRANT_URL is correct.")
+        print("    -> Start Qdrant (e.g. Docker) and ensure QDRANT_URL is correct.")
         sys.exit(1)
 
     # --- 2. Collection exists ---
@@ -59,7 +59,7 @@ def main() -> None:
     if QDRANT_COLLECTION not in collections:
         print(f"    FAIL – Collection {QDRANT_COLLECTION!r} not found.")
         print(f"    Existing collections: {collections or '(none)'}")
-        print("    → Run: python scripts/ingest_docs.py")
+        print("    -> Run: python scripts/ingest_docs.py")
         sys.exit(1)
     print(f"    OK – Collection {QDRANT_COLLECTION!r} exists.")
 
@@ -80,7 +80,7 @@ def main() -> None:
         print(f"    Vector size     = {vector_size or 'N/A'}")
         if points_count == 0:
             print("    FAIL – Collection is empty. No documents ingested.")
-            print("    → Run: python scripts/ingest_docs.py")
+            print("    -> Run: python scripts/ingest_docs.py")
             sys.exit(1)
         print("    OK – Collection has data.")
     except Exception as e:

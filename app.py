@@ -25,7 +25,18 @@ from lib.provider import (
 )
 from lib.retrieval import vector_search, hybrid_retrieve
 from lib.graph_kg import build_kg_from_text
-from lib.location import nearby_places, osrm_commute, area_safety
+from lib.location import (
+    nearby_places,
+    osrm_commute,
+    area_safety,
+    POI_CATEGORIES,
+    nearby_pois_with_routes,
+)
+from lib.map_ui import build_map_html, build_pydeck_map, build_pois_table_data
+from lib.sun_orientation import build_sun_orientation_html
+from lib.agents import run_orchestrator
+from lib.a2ui import parse_directives_from_text
+from lib.mcp_client import list_mcp_tools, register_default_mcp_tools
 
 # -----------------------------------------------------------------------------
 # Config
@@ -172,6 +183,42 @@ def _render_kg_tab() -> None:
         st.components.v1.html(html, height=500, scrolling=True)
 
 
+# ---------- Map tab: address + nearby facilities by category, route/distance, walk/bike/car ----------
+def _render_map_tab() -> None:
+    st.subheader("Map – nearby facilities")
+    st.caption("Enter an address, choose categories and transport mode (walk / bike / car). Map shows POIs with route distance and duration. Note: public OSRM often supports only car; for walk/bike, distance may be straight-line.")
+    address = st.text_input("Address", value="Amsterdam Centrum", key="map_addr")
+    categories = st.multiselect(
+        "Facility categories",
+        options=list(POI_CATEGORIES.keys()),
+        default=["schools", "grocery", "hospitals", "gym", "restaurants", "banks"],
+        format_func=lambda x: POI_CATEGORIES[x][1],
+        key="map_cats",
+    )
+    profile = st.radio("Route by", options=["driving", "walking", "cycling"], format_func=lambda x: {"driving": "Car", "walking": "Walk", "cycling": "Bike"}[x], key="map_profile", horizontal=True)
+    if st.button("Show map", key="map_btn"):
+        if not address.strip():
+            st.warning("Enter an address.")
+        elif not categories:
+            st.warning("Select at least one category.")
+        else:
+            with st.spinner("Geocoding and fetching POIs..."):
+                center, pois = nearby_pois_with_routes(address.strip(), categories, profile=profile, radius_m=1500, max_pois=25)
+            if center is None:
+                st.error("Could not geocode that address.")
+            else:
+                st.success(f"Found {len(pois)} places near **{address}**.")
+                deck = build_pydeck_map(center, pois, profile, height=500)
+                if deck is not None:
+                    st.pydeck_chart(deck, use_container_width=True)
+                else:
+                    html = build_map_html(center, pois, profile)
+                    st.components.v1.html(html, height=500, scrolling=False)
+                if pois:
+                    table_data = build_pois_table_data(pois, profile)
+                    st.dataframe(table_data, use_container_width=True, hide_index=True)
+
+
 # ---------- Location tab (Phase 2) ----------
 def _render_location_tab() -> None:
     st.subheader("Location & commute")
@@ -201,36 +248,59 @@ def _render_location_tab() -> None:
             st.json(res)
 
 
-# ---------- Phase 4 placeholder (Multi-agent, A2UI, MCP) ----------
+# ---------- Phase 4: Agents tab (Multi-agent, A2UI, MCP) ----------
 def _render_agents_tab() -> None:
     st.subheader("Agents (Phase 4)")
-    st.caption("Multi-agent: orchestrator + specialists (retrieval, location, calculator). A2UI directives, MCP tools.")
-    st.info("Phase 4: LangGraph/LangChain multi-agent routing, A2UI schema + renderer, MCP client. See PHASES.md.")
+    st.caption("Orchestrator routes to retrieval, location, and calculator specialists. A2UI directives render in chat.")
+    register_default_mcp_tools()
+    mcp_tools = list_mcp_tools()
+    if mcp_tools:
+        st.write("**MCP tools registered:**", ", ".join(mcp_tools))
+    else:
+        st.caption("No MCP tools registered. OSRM and others register when available.")
+    st.markdown("Enable **Use Phase 4 agents** in the sidebar to route queries through the orchestrator. Responses may include A2UI directives (e.g. show calculator, show map).")
 
 # ---------- Sun-orientation tab (Phase 3) ----------
 def _render_sun_tab() -> None:
     st.subheader("Sun orientation")
-    st.caption("Phase 3: Sun path vs apartment; orientation and date slider (SVG/HTML).")
-    date = st.date_input("Date", key="sun_date")
+    st.caption("Sun path vs apartment: elevation through the day. Date and building orientation control the view.")
+    sun_date = st.date_input("Date", key="sun_date")
     orientation = st.selectbox("Orientation", ["South", "SW", "West", "NW", "North", "NE", "East", "SE"], key="sun_orient")
-    st.info(f"Sun path for {date} facing {orientation}. Full SVG widget in Phase 3.")
+    html = build_sun_orientation_html(sun_date, orientation)
+    st.components.v1.html(html, height=360, scrolling=False)
 
-# ---------- Observability tab ----------
+# ---------- Observability tab (Phase 3) ----------
 def _render_observability_tab() -> None:
     st.subheader("Observability")
-    st.caption("Token consumption, price estimation, and link to Langfuse when configured.")
+    st.caption("Token/price, Langfuse, retrieval/response quality, and drift indicators.")
     langfuse_host = os.environ.get("LANGFUSE_HOST", "").strip() or os.environ.get("LANGFUSE_URL", "").strip()
     if langfuse_host:
         st.markdown(f"**Langfuse:** [Open dashboard]({langfuse_host})")
     else:
         st.info("Set LANGFUSE_HOST or LANGFUSE_URL in .env to link to Langfuse.")
     st.metric("Token / price tracking", "Via Langfuse callback when enabled")
-    with st.expander("Retrieval quality (Phase 3)"):
-        st.caption("RAGAS/Phoenix or Langfuse retrieval metrics.")
-    with st.expander("Response quality (Phase 3)"):
-        st.caption("Response quality metrics.")
-    with st.expander("Drift indicators (Phase 3)"):
-        st.caption("Input/output distributions, quality trends.")
+    try:
+        from monitoring.drift_detection import get_quality_summary, get_drift_indicators
+        summary = get_quality_summary()
+        drift = get_drift_indicators()
+    except Exception:
+        summary = {}
+        drift = {}
+    with st.expander("Retrieval quality"):
+        rq = summary.get("retrieval_quality_mean")
+        st.metric("Retrieval quality (mean)", f"{rq:.3f}" if rq is not None else "No data")
+        st.caption("From RAGAS/Phoenix or monitoring/drift_detection. Run scripts/run_ragas.py to populate.")
+    with st.expander("Response quality"):
+        rp = summary.get("response_quality_mean")
+        st.metric("Response quality (mean)", f"{rp:.3f}" if rp is not None else "No data")
+        lat = summary.get("latency_p50_ms")
+        st.metric("Latency p50 (ms)", f"{lat:.0f}" if lat is not None else "No data")
+    with st.expander("Drift indicators"):
+        if drift.get("has_data"):
+            st.write("**Trends:**", drift.get("retrieval_trend"), "/", drift.get("response_trend"))
+        else:
+            st.caption("Record scores via monitoring.drift_detection to see trends.")
+    st.markdown("[Responsible AI](docs/RESPONSIBLE_AI.md) | [Monitoring / Grafana](docs/monitoring.md)")
 
 
 # ---------- Main ----------
@@ -250,6 +320,8 @@ def main() -> None:
         st.session_state["use_hybrid"] = True
     if "web_search" not in st.session_state:
         st.session_state["web_search"] = False
+    if "use_agents" not in st.session_state:
+        st.session_state["use_agents"] = False
 
     with st.sidebar:
         st.header("Settings")
@@ -265,18 +337,21 @@ def main() -> None:
         cur = st.session_state["selected_model"]
         model = st.selectbox("Model", options=models, index=models.index(cur) if cur in models else 0, key="sb_model")
         st.session_state["selected_model"] = model
-        st.session_state["use_hybrid"] = st.checkbox("Use hybrid search (RRF)", value=st.session_state["use_hybrid"], key="use_hybrid")
+        st.checkbox("Use hybrid search (RRF)", value=st.session_state["use_hybrid"], key="use_hybrid")
         top_k = st.slider("Retrieval chunks", 3, 20, MAX_SEARCH_RESULTS, key="top_k")
-        st.session_state["web_search"] = st.checkbox("Web search (Tavily)", value=st.session_state["web_search"], key="web_search")
+        st.checkbox("Web search (Tavily)", value=st.session_state["web_search"], key="web_search")
+        st.checkbox("Use Phase 4 agents (orchestrator)", value=st.session_state["use_agents"], key="use_agents")
         if st.button("Clear conversation", use_container_width=True):
             st.session_state["messages"] = []
             st.rerun()
 
-    tab_chat, tab_calc, tab_kg, tab_loc, tab_sun, tab_obs, tab_agents = st.tabs(
-        ["Chat", "Mortgage Calculator", "Knowledge Graph", "Location", "Sun", "Observability", "Agents (P4)"]
+    tab_chat, tab_calc, tab_map, tab_kg, tab_loc, tab_sun, tab_obs, tab_agents = st.tabs(
+        ["Chat", "Mortgage Calculator", "Map", "Knowledge Graph", "Location", "Sun", "Observability", "Agents (P4)"]
     )
     with tab_calc:
         _render_calculator_tab()
+    with tab_map:
+        _render_map_tab()
     with tab_kg:
         _render_kg_tab()
     with tab_loc:
@@ -297,6 +372,8 @@ def main() -> None:
                 if msg["role"] == "assistant" and msg.get("tools_used"):
                     st.markdown(_format_tools_used(msg["tools_used"]) + "\n\n🤖 **Assistant:**\n\n")
                 st.write(msg["content"])
+                if msg["role"] == "assistant" and msg.get("a2ui_directives"):
+                    st.caption("**A2UI:** " + ", ".join(d.get("type", "") for d in msg["a2ui_directives"]))
                 if msg["role"] == "assistant" and msg.get("sources"):
                     with st.expander("Sources"):
                         for s in msg["sources"]:
@@ -319,18 +396,45 @@ def main() -> None:
             query_embedding = get_embedding(embedding_client, prompt)
             tool_calls: list[dict] = []
             chunks: list[dict] = []
-            try:
-                if st.session_state["use_hybrid"]:
-                    chunks, tool_calls = hybrid_retrieve(
-                        qdrant, QDRANT_COLLECTION, query_embedding, prompt, limit=top_k
-                    )
-                else:
-                    chunks, tool_calls = vector_search(
-                        qdrant, QDRANT_COLLECTION, query_embedding, limit=top_k, query_text=prompt
-                    )
-            except Exception:
-                chunks, tool_calls = [], [{"tool": "vector_search", "args": {"query": prompt[:80], "limit": top_k}}]
-            context = "\n\n---\n\n".join(c.get("text", "") for c in chunks) if chunks else ""
+            a2ui_directives: list[dict] = []
+
+            if st.session_state.get("use_agents"):
+                retrieval_chunks: list[dict] = []
+                def retrieval_fn(q: str):
+                    nonlocal retrieval_chunks
+                    try:
+                        if st.session_state["use_hybrid"]:
+                            c, tc = hybrid_retrieve(qdrant, QDRANT_COLLECTION, get_embedding(embedding_client, q), q, limit=top_k)
+                        else:
+                            c, tc = vector_search(qdrant, QDRANT_COLLECTION, get_embedding(embedding_client, q), limit=top_k, query_text=q)
+                    except Exception:
+                        c, tc = [], [{"tool": "vector_search", "args": {"query": q[:80]}}]
+                    retrieval_chunks[:] = c
+                    return "\n\n---\n\n".join(x.get("text", "") for x in c), tc
+                def location_fn(q: str):
+                    res, tc = nearby_places("Amsterdam Centrum" if "amsterdam" not in q.lower() else q[:80])
+                    ctx = ""
+                    if res:
+                        r = res[0]
+                        ctx = f"Location: {r.get('lat')}, {r.get('lon')}. POIs: " + "; ".join(p.get("name", "") for p in r.get("pois", [])[:5])
+                    return ctx, tc
+                def calculator_fn(q: str):
+                    return "Use the Mortgage Calculator tab for Bruto maandlasten, Hypotheek, Kosten koper.", [{"tool": "calculator_agent", "args": {"query": q[:80]}}]
+                context, tool_calls, a2ui_directives, _ = run_orchestrator(prompt, retrieval_fn, location_fn, calculator_fn)
+                chunks = retrieval_chunks
+            else:
+                try:
+                    if st.session_state["use_hybrid"]:
+                        chunks, tool_calls = hybrid_retrieve(
+                            qdrant, QDRANT_COLLECTION, query_embedding, prompt, limit=top_k
+                        )
+                    else:
+                        chunks, tool_calls = vector_search(
+                            qdrant, QDRANT_COLLECTION, query_embedding, limit=top_k, query_text=prompt
+                        )
+                except Exception:
+                    chunks, tool_calls = [], [{"tool": "vector_search", "args": {"query": prompt[:80], "limit": top_k}}]
+                context = "\n\n---\n\n".join(c.get("text", "") for c in chunks) if chunks else ""
 
             # Optional Tavily
             if st.session_state["web_search"]:
@@ -369,6 +473,7 @@ def main() -> None:
                 "content": answer,
                 "tools_used": tool_calls,
                 "sources": chunks,
+                "a2ui_directives": a2ui_directives,
             })
             st.rerun()
 

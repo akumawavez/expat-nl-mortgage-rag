@@ -25,7 +25,7 @@ python scripts/test_ingestion.py   # expect RESULT: PASS
 streamlit run app.py
 ```
 
-**app.py** includes: **Chat** (RAG, hybrid retrieval, web search toggle, Tools Used + citations), **Mortgage Calculator**, **Knowledge Graph** (PyVis), **Location** (nearby_places, OSRM, area_safety), **Sun** (Phase 3 placeholder), **Observability**, **Agents** (Phase 4 placeholder).
+**app.py** includes: **Chat** (RAG, hybrid retrieval, web search toggle, Tools Used + citations; optional **Phase 4 agents** orchestrator), **Mortgage Calculator**, **Knowledge Graph** (PyVis), **Location** (nearby_places, OSRM, area_safety), **Sun** (Phase 3 sun-path SVG), **Observability** (retrieval/response quality, drift, Langfuse), **Agents** (Phase 4: MCP tools, A2UI directives).
 
 ## Run steps per phase
 
@@ -51,6 +51,13 @@ See **[PHASES.md – Code run steps at end of each phase](PHASES.md#code-run-ste
 - `lib/provider.py` – LLM/embedding client (OpenAI, OpenRouter, Ollama).
 - `lib/graph_kg.py` – KG extraction and PyVis (Phase 2).
 - `lib/location.py` – nearby_places, osrm_commute, area_safety (Phase 2).
+- `lib/sun_orientation.py` – Sun-path SVG (Phase 3).
+- `lib/agents.py` – Orchestrator + specialists (Phase 4).
+- `lib/a2ui.py` – A2UI directive schema and parsing (Phase 4).
+- `lib/mcp_client.py` – MCP tool registry (Phase 4).
+- `monitoring/drift_detection.py` – Quality/drift metrics (Phase 3).
+- `data/golden_rag.json` – Golden dataset for evals; `scripts/run_ragas.py` – RAG evals (Phase 3).
+- `scripts/metrics_server.py` – Prometheus /metrics (Phase 3); `docs/monitoring.md`, `docs/RESPONSIBLE_AI.md`.
 - `tests/` – pytest (retrieval, calculator, chunking).
 - `DEPLOYMENT.md`, `.env.example` – Deployment and env vars.
 - **`PHASES.md`** – Four-phase plan, completion tests, and **code run steps at end of each phase**.
