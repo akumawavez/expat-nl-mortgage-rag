@@ -1,0 +1,23 @@
+{
+  "scores": [
+    {
+      "question": "Can I deduct mortgage interest in the Netherlands?",
+      "faithfulness": 0.7059,
+      "answer_relevancy": 1.0
+    },
+    {
+      "question": "What is NHG?",
+      "faithfulness": 0.9,
+      "answer_relevancy": 1.0
+    },
+    {
+      "question": "Who can help expats with a mortgage?",
+      "faithfulness": 0.7,
+      "answer_relevancy": 1.0
+    }
+  ],
+  "summary": {
+    "faithfulness_mean": 0.7686333333333333,
+    "answer_relevancy_mean": 1.0
+  }
+}

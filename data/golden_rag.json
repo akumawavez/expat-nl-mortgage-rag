@@ -1,0 +1,17 @@
+[
+  {
+    "question": "Can I deduct mortgage interest in the Netherlands?",
+    "reference_answer": "Yes, under certain conditions. Mortgage interest deduction (hypotheekrenteaftrek) applies to owner-occupied homes. The Tax Authority (Belastingdienst) oversees this.",
+    "reference_contexts": ["Mortgage interest deduction (hypotheekrenteaftrek) applies to owner-occupied homes in the Netherlands. The Tax Authority (Belastingdienst) oversees tax returns."]
+  },
+  {
+    "question": "What is NHG?",
+    "reference_answer": "NHG (Nationale Hypotheek Garantie) provides guarantees for mortgages in the Netherlands.",
+    "reference_contexts": ["NHG (Nationale Hypotheek Garantie) provides guarantees for mortgages."]
+  },
+  {
+    "question": "Who can help expats with a mortgage?",
+    "reference_answer": "A mortgage advisor (hypotheekadviseur) can help expats with mortgages in the Netherlands.",
+    "reference_contexts": ["A mortgage advisor (hypotheekadviseur) can help expats."]
+  }
+]
