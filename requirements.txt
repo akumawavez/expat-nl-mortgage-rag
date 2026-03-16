@@ -1,0 +1,34 @@
+# Dutch Real Estate / Expat NL Mortgage RAG – dependencies
+# Generated from app.py, app_wRAG.py, app_UploadPDF_Chat.py, app_RAG_ollama_langchain.py,
+# app_FastEmbed_UploadPDF_Chat.py, ChatApp_RAG_ollama_langchain.py, simple_ollama_chatbot.py
+
+# Web app
+streamlit>=1.28.0
+
+# HTTP client (Ollama API)
+requests>=2.28.0
+
+# PDF processing
+pypdf>=3.0.0
+
+# Vector store
+qdrant-client>=1.7.0
+
+# Embeddings (use at least one; both listed for app variants)
+sentence-transformers>=2.2.0
+fastembed>=0.2.0
+
+# LangChain (RAG/agent apps)
+langchain>=0.1.0
+langchain-core>=0.1.0
+langchain-ollama>=0.1.0
+
+# Phase 1: ingestion and OpenAI RAG
+python-dotenv>=1.0.0
+openai>=1.0.0
+
+# Phase 1: Web search (optional)
+tavily-python>=0.3.0
+
+# Phase 2: Knowledge Graph (Neo4j)
+neo4j>=5.0.0
