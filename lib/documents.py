@@ -1,0 +1,125 @@
+"""
+Documents in vector store: list uploaded documents and upsert new PDFs.
+
+Used by the Documents tab for source tracing and upload.
+"""
+from __future__ import annotations
+
+import uuid
+from io import BytesIO
+from typing import Any
+
+from pypdf import PdfReader
+
+
+def list_documents_in_store(qdrant_client: Any, collection_name: str) -> list[dict[str, Any]]:
+    """
+    List all documents (unique source values) in the collection with chunk counts.
+    Returns list of {"source": str, "chunk_count": int}.
+    """
+    try:
+        seen: dict[str, int] = {}
+        offset = None
+        while True:
+            records, offset = qdrant_client.scroll(
+                collection_name=collection_name,
+                limit=500,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            if not records:
+                break
+            for r in records:
+                src = (r.payload or {}).get("source") or ""
+                if src:
+                    seen[src] = seen.get(src, 0) + 1
+            if offset is None:
+                break
+        return [{"source": s, "chunk_count": c} for s, c in sorted(seen.items())]
+    except Exception:
+        return []
+
+
+def extract_text_from_pdf_bytes(data: bytes) -> str:
+    """Extract raw text from PDF bytes."""
+    reader = PdfReader(BytesIO(data))
+    parts = []
+    for page in reader.pages:
+        part = page.extract_text()
+        if part:
+            parts.append(part)
+    return "\n\n".join(parts)
+
+
+def chunk_text_simple(text: str, chunk_size: int = 800, overlap: int = 150) -> list[str]:
+    """Simple overlapping chunks (aligned with ingestion)."""
+    if not text or not text.strip():
+        return []
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        start = end - overlap
+        if start >= len(text):
+            break
+    return chunks
+
+
+def upsert_pdf_to_qdrant(
+    qdrant_client: Any,
+    embedding_client: Any,
+    collection_name: str,
+    file_name: str,
+    file_bytes: bytes,
+    chunk_size: int = 800,
+    overlap: int = 150,
+    embedding_model: str = "text-embedding-3-small",
+    vector_dimension: int = 1536,
+) -> int:
+    """
+    Upsert a single PDF: delete existing chunks for this source, then insert new chunks.
+    Returns number of chunks inserted. Creates collection if missing.
+    """
+    from qdrant_client.models import PointStruct, VectorParams, Distance, Filter, FieldCondition, MatchValue
+
+    names = [c.name for c in (qdrant_client.get_collections().collections or [])]
+    if collection_name not in names:
+        qdrant_client.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(size=vector_dimension, distance=Distance.COSINE),
+        )
+
+    text = extract_text_from_pdf_bytes(file_bytes)
+    chunks = chunk_text_simple(text, chunk_size=chunk_size, overlap=overlap)
+    if not chunks:
+        return 0
+
+    # Delete existing points for this source
+    qdrant_client.delete(
+        collection_name=collection_name,
+        points_selector=Filter(must=[FieldCondition(key="source", match=MatchValue(value=file_name))]),
+    )
+
+    # Embed in batches
+    batch_size = 100
+    all_embeddings = []
+    for i in range(0, len(chunks), batch_size):
+        batch = [t if t.strip() else " " for t in chunks[i : i + batch_size]]
+        resp = embedding_client.embeddings.create(input=batch, model=embedding_model)
+        order = {e.index: e.embedding for e in resp.data}
+        all_embeddings.extend([order[j] for j in range(len(batch))])
+
+    points = [
+        PointStruct(
+            id=str(uuid.uuid4()),
+            vector=emb,
+            payload={"text": chunk, "source": file_name},
+        )
+        for emb, chunk in zip(all_embeddings, chunks)
+    ]
+    qdrant_client.upsert(collection_name=collection_name, points=points)
+    return len(points)
