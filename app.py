@@ -7,11 +7,15 @@ Run scripts/ingest_docs.py first to populate Qdrant. Sidebar: provider/model fro
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
 from pathlib import Path
 
 import dotenv
 dotenv.load_dotenv(Path(__file__).resolve().parent / ".env")
+
+logger = logging.getLogger(__name__)
 
 import streamlit as st
 from qdrant_client import QdrantClient
@@ -52,6 +56,9 @@ VECTOR_DIMENSION = int(os.environ.get("VECTOR_DIMENSION", "1536"))
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
 LLM_CHOICE_DEFAULT = os.environ.get("LLM_CHOICE", "gpt-4o-mini")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+MAX_QUERY_LENGTH = int(os.environ.get("MAX_QUERY_LENGTH", "5000"))
+STREAM_TIMEOUT_SECONDS = int(os.environ.get("STREAM_TIMEOUT_SECONDS", "30"))
+MAX_COMPLETION_TOKENS = int(os.environ.get("MAX_COMPLETION_TOKENS", "2048"))
 
 SYSTEM_PROMPT = (
     "You are an expert assistant helping expats and international buyers with Dutch mortgages "
@@ -64,6 +71,18 @@ SYSTEM_PROMPT = (
 @st.cache_resource
 def get_qdrant() -> QdrantClient:
     return QdrantClient(url=QDRANT_URL)
+
+
+def _validate_and_sanitize_query(text: str) -> str:
+    """Enforce max length and remove control characters. Returns sanitized string."""
+    if not text or not isinstance(text, str):
+        return ""
+    # Remove control characters (except newline, tab)
+    sanitized = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+    sanitized = sanitized.strip()
+    if len(sanitized) > MAX_QUERY_LENGTH:
+        sanitized = sanitized[:MAX_QUERY_LENGTH].rstrip()
+    return sanitized
 
 
 def get_embedding(client, text: str) -> list[float]:
@@ -89,8 +108,8 @@ def _tavily_search(query: str, max_results: int = 5) -> tuple[str, list[dict]]:
                 if content:
                     parts.append(f"[{title}]({url})\n{content}")
             return "\n\n".join(parts), [{"tool": "tavily_search", "args": {"query": query[:80]}}]
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Tavily web search failed: %s", e, exc_info=True)
     return "", []
 
 
@@ -107,7 +126,8 @@ def _format_tools_used(tool_calls: list[dict]) -> str:
 def _stream_api(provider: str, model: str, messages: list[dict], placeholder, prefix: str = "") -> str:
     client = get_llm_client(provider_override=provider)
     full = ""
-    for chunk in client.chat.completions.create(model=model, messages=messages, stream=True):
+    kwargs = {"model": model, "messages": messages, "stream": True, "max_tokens": MAX_COMPLETION_TOKENS}
+    for chunk in client.chat.completions.create(**kwargs):
         if chunk.choices and chunk.choices[0].delta.content:
             full += chunk.choices[0].delta.content
             placeholder.markdown(prefix + full + "▌")
@@ -118,9 +138,9 @@ def _stream_api(provider: str, model: str, messages: list[dict], placeholder, pr
 def _stream_ollama(model: str, messages: list[dict], placeholder, prefix: str = "") -> str:
     import requests
     base = OLLAMA_URL.rstrip("/")
-    payload = {"model": model, "messages": messages, "stream": True}
+    payload = {"model": model, "messages": messages, "stream": True, "options": {"num_predict": MAX_COMPLETION_TOKENS}}
     full = ""
-    r = requests.post(f"{base}/api/chat", json=payload, stream=True, timeout=600)
+    r = requests.post(f"{base}/api/chat", json=payload, stream=True, timeout=STREAM_TIMEOUT_SECONDS)
     r.raise_for_status()
     for line in r.iter_lines(decode_unicode=True):
         if not line:
@@ -152,6 +172,10 @@ ENERGIELABELS = [
 
 def _render_calculator_tab() -> None:
     st.subheader("Mortgage calculator (ING-style)")
+    st.warning(
+        "**Disclaimer:** All values are placeholder estimates only (e.g. ~0.45% monthly interest, ~6% costs). "
+        "Do not use for real financial decisions. Consult a mortgage advisor for accurate numbers."
+    )
     st.caption("Bid, eigen inleg, type woning, energielabel → Bruto maandlasten, Hypotheek, Kosten koper")
     bid = st.number_input("Bod / aankoopprijs (€)", min_value=50000, max_value=2_000_000, value=350000, step=10000)
     eigen_inleg = st.number_input("Eigen inleg (€)", min_value=0, max_value=bid, value=35000, step=5000)
@@ -166,7 +190,6 @@ def _render_calculator_tab() -> None:
     st.metric("Bruto maandlasten (indicatief)", f"€ {maandlast_approx:,.2f}")
     kk = round(bid * 0.06, 0)  # ~6% costs koper placeholder
     st.metric("Kosten koper (indicatief)", f"€ {kk:,.0f}")
-    st.caption("Indicative values only; consult a mortgage advisor for real numbers.")
 
 
 # ---------- Knowledge Graph tab (Phase 2) ----------
@@ -332,7 +355,8 @@ def _render_observability_tab() -> None:
         from monitoring.drift_detection import get_quality_summary, get_drift_indicators
         summary = get_quality_summary()
         drift = get_drift_indicators()
-    except Exception:
+    except Exception as e:
+        logger.warning("Observability metrics failed: %s", e)
         summary = {}
         drift = {}
     with st.expander("Retrieval quality"):
@@ -433,6 +457,12 @@ def main() -> None:
                             st.text(s.get("text", "")[:500] + ("..." if len(s.get("text", "")) > 500 else ""))
 
         if prompt := st.chat_input("Ask about Dutch mortgages, tax, or housing..."):
+            prompt = _validate_and_sanitize_query(prompt)
+            if not prompt:
+                st.warning("Query is empty or invalid after sanitization.")
+                st.stop()
+            if len(prompt) >= MAX_QUERY_LENGTH:
+                st.caption(f"Query truncated to {MAX_QUERY_LENGTH} characters.")
             st.session_state["messages"].append({"role": "user", "content": prompt})
             st.chat_message("user").write(prompt)
 
@@ -458,8 +488,9 @@ def main() -> None:
                             c, tc = hybrid_retrieve(qdrant, QDRANT_COLLECTION, get_embedding(embedding_client, q), q, limit=top_k)
                         else:
                             c, tc = vector_search(qdrant, QDRANT_COLLECTION, get_embedding(embedding_client, q), limit=top_k, query_text=q)
-                    except Exception:
-                        c, tc = [], [{"tool": "vector_search", "args": {"query": q[:80]}}]
+                    except Exception as e:
+                        logger.error("Agent retrieval failed: %s", e, exc_info=True)
+                        c, tc = [], [{"tool": "vector_search", "args": {"error": str(e)}}]
                     retrieval_chunks[:] = c
                     return "\n\n---\n\n".join(x.get("text", "") for x in c), tc
                 def location_fn(q: str):
@@ -483,8 +514,9 @@ def main() -> None:
                         chunks, tool_calls = vector_search(
                             qdrant, QDRANT_COLLECTION, query_embedding, limit=top_k, query_text=prompt
                         )
-                except Exception:
-                    chunks, tool_calls = [], [{"tool": "vector_search", "args": {"query": prompt[:80], "limit": top_k}}]
+                except Exception as e:
+                    logger.error("Retrieval failed: %s", e, exc_info=True)
+                    chunks, tool_calls = [], [{"tool": "vector_search", "args": {"error": str(e)}}]
                 context = "\n\n---\n\n".join(c.get("text", "") for c in chunks) if chunks else ""
 
             # Optional Tavily

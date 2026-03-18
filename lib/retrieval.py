@@ -4,7 +4,10 @@ Retrieval module for Phase 1: vector search and hybrid (vector + keyword) with R
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Default RRF constant (reciprocal rank fusion)
 RRF_K = 60
@@ -41,8 +44,9 @@ def vector_search(
             query_vector=query_vector,
             limit=limit,
         )
-    except Exception:
-        return [], []
+    except Exception as e:
+        logger.error("Vector search failed: %s", e, exc_info=True)
+        return [], [{"tool": "vector_search", "args": {"error": str(e)}}]
 
     chunks = []
     for hit in results:
@@ -84,8 +88,9 @@ def hybrid_retrieve(
             query_vector=query_vector,
             limit=vector_limit,
         )
-    except Exception:
-        return [], []
+    except Exception as e:
+        logger.error("Hybrid retrieve (vector) failed: %s", e, exc_info=True)
+        return [], [{"tool": "hybrid_retrieve", "args": {"error": str(e)}}]
 
     if not results:
         return [], [{"tool": "hybrid_retrieve", "args": {"query": query_text[:80], "limit": limit}}]
