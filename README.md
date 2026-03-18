@@ -8,7 +8,7 @@ Each turn shows **Tools Used** (e.g. `vector_search`, `hybrid_retrieve`, `tavily
 
 ## Quick start
 
-From the project root:
+From the project root (see **[docs/QUICKSTART.md](docs/QUICKSTART.md)** for a step-by-step guide with diagrams):
 
 ```bash
 # 1. Environment
@@ -65,3 +65,24 @@ See **[PHASES.md – Code run steps at end of each phase](PHASES.md#code-run-ste
 ## Docs
 
 - **[PHASES.md](PHASES.md)** – Four-phase implementation plan, completion tests, and **run steps when each phase is completed**.
+- **[DEPLOYMENT.md](DEPLOYMENT.md)** – Deployment and environment variables.
+- **[CODE_TODO.md](CODE_TODO.md)** – Code and refactor to-do list (refactor, instrumentation, prompt injection, evals).
+
+### Documentation (docs/)
+
+| Document | Description |
+|----------|-------------|
+| [docs/QUICKSTART.md](docs/QUICKSTART.md) | Quick start guide with setup flowchart |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Architecture and end-to-end workflows (with diagrams) |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Usual errors and how to debug |
+| [docs/PRD.md](docs/PRD.md) | Product Requirements Document |
+| [docs/API.md](docs/API.md) | API and tools documentation (lib, scripts, external services) |
+| [docs/MONITORING_AND_EVALUATION.md](docs/MONITORING_AND_EVALUATION.md) | Monitoring, latency, and evaluation metrics |
+| [docs/monitoring.md](docs/monitoring.md) | Prometheus /metrics and Grafana |
+| [docs/REPORT.md](docs/REPORT.md) | Presentation-style report |
+| [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | Branching, PRs, and merge to main |
+| [docs/EXECUTION_SUMMARY.md](docs/EXECUTION_SUMMARY.md) | Execution summary, to-do, and completed tracking |
+| [docs/DESIGN_AND_VERSION_CONTROL.md](docs/DESIGN_AND_VERSION_CONTROL.md) | Design thinking, system design, version control |
+| [docs/PRODUCTION_MLOPS_AIOPS.md](docs/PRODUCTION_MLOPS_AIOPS.md) | Production, MLOps, and AIOps |
+| [docs/SECURITY_AND_ERROR_HANDLING.md](docs/SECURITY_AND_ERROR_HANDLING.md) | Security and error handling (including prompt injection) |
+| [docs/RESPONSIBLE_AI.md](docs/RESPONSIBLE_AI.md) | Traceability, transparency, and oversight |

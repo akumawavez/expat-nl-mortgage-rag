@@ -34,6 +34,7 @@ from lib.location import (
 )
 from lib.map_ui import build_map_html, build_pydeck_map, build_pois_table_data
 from lib.sun_orientation import build_sun_orientation_html
+from lib.documents import list_documents_in_store, upsert_pdf_to_qdrant
 from lib.agents import run_orchestrator
 from lib.a2ui import parse_directives_from_text
 from lib.mcp_client import list_mcp_tools, register_default_mcp_tools
@@ -44,6 +45,8 @@ from lib.mcp_client import list_mcp_tools, register_default_mcp_tools
 PAGE_TITLE = "Expat NL Mortgage Assistant (Phase 1)"
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "property_docs")
+CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "800"))
+CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "150"))
 MAX_SEARCH_RESULTS = int(os.environ.get("MAX_SEARCH_RESULTS", "10"))
 VECTOR_DIMENSION = int(os.environ.get("VECTOR_DIMENSION", "1536"))
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
@@ -181,6 +184,52 @@ def _render_kg_tab() -> None:
     else:
         html = build_kg_from_text("")
         st.components.v1.html(html, height=500, scrolling=True)
+
+
+# ---------- Documents tab: list uploaded docs, upload new PDF to vector store (and optional KG) ----------
+def _render_documents_tab() -> None:
+    st.subheader("Documents in vector store & knowledge base")
+    st.caption("Documents listed below are used for RAG retrieval. Upload a PDF to add it to the vector database (and optionally run KG extraction in the Knowledge Graph tab).")
+    qdrant = get_qdrant()
+    docs = list_documents_in_store(qdrant, QDRANT_COLLECTION)
+    if docs:
+        st.markdown("**Uploaded documents**")
+        for d in docs:
+            st.text(f"• {d['source']} — {d['chunk_count']} chunks")
+    else:
+        st.info("No documents in the vector store yet. Run scripts/ingest_docs.py or upload a PDF below.")
+    st.divider()
+    st.markdown("**Upload new document**")
+    uploaded = st.file_uploader("Choose a PDF", type=["pdf"], key="doc_upload")
+    add_to_kg = st.checkbox("Also run KG extraction and show in Knowledge Graph tab", value=False, key="doc_add_kg")
+    if uploaded is not None and st.button("Ingest into vector store", key="doc_ingest"):
+        file_bytes = uploaded.getvalue()
+        with st.spinner("Extracting text, chunking, embedding, and upserting..."):
+            try:
+                emb = get_embedding_client()
+                name = uploaded.name or "uploaded.pdf"
+                num = upsert_pdf_to_qdrant(
+                    qdrant,
+                    emb,
+                    QDRANT_COLLECTION,
+                    file_name=name,
+                    file_bytes=file_bytes,
+                    chunk_size=CHUNK_SIZE,
+                    overlap=CHUNK_OVERLAP,
+                    embedding_model=EMBEDDING_MODEL,
+                    vector_dimension=VECTOR_DIMENSION,
+                )
+                st.success(f"Inserted {num} chunks for «{name}».")
+                if add_to_kg:
+                    from lib.documents import extract_text_from_pdf_bytes
+                    text = extract_text_from_pdf_bytes(file_bytes)
+                    if text.strip():
+                        html = build_kg_from_text(text[:8000])
+                        st.caption("Knowledge graph from this document:")
+                        st.components.v1.html(html, height=400, scrolling=True)
+                st.rerun()
+            except Exception as e:
+                st.error(str(e))
 
 
 # ---------- Map tab: address + nearby facilities by category, route/distance, walk/bike/car ----------
@@ -345,13 +394,15 @@ def main() -> None:
             st.session_state["messages"] = []
             st.rerun()
 
-    tab_chat, tab_calc, tab_map, tab_kg, tab_loc, tab_sun, tab_obs, tab_agents = st.tabs(
-        ["Chat", "Mortgage Calculator", "Map", "Knowledge Graph", "Location", "Sun", "Observability", "Agents (P4)"]
+    tab_chat, tab_calc, tab_map, tab_docs, tab_kg, tab_loc, tab_sun, tab_obs, tab_agents = st.tabs(
+        ["Chat", "Mortgage Calculator", "Map", "Documents", "Knowledge Graph", "Location", "Sun", "Observability", "Agents (P4)"]
     )
     with tab_calc:
         _render_calculator_tab()
     with tab_map:
         _render_map_tab()
+    with tab_docs:
+        _render_documents_tab()
     with tab_kg:
         _render_kg_tab()
     with tab_loc:
@@ -375,10 +426,10 @@ def main() -> None:
                 if msg["role"] == "assistant" and msg.get("a2ui_directives"):
                     st.caption("**A2UI:** " + ", ".join(d.get("type", "") for d in msg["a2ui_directives"]))
                 if msg["role"] == "assistant" and msg.get("sources"):
-                    with st.expander("Sources"):
+                    with st.expander("Source tracing (documents used for this answer)"):
                         for s in msg["sources"]:
                             src = s.get("source", "?")
-                            st.caption(f"**{src}**")
+                            st.caption(f"**Document:** {src}")
                             st.text(s.get("text", "")[:500] + ("..." if len(s.get("text", "")) > 500 else ""))
 
         if prompt := st.chat_input("Ask about Dutch mortgages, tax, or housing..."):
