@@ -32,7 +32,7 @@ from lib.location import (
 )
 from lib.map_ui import build_map_html, build_pydeck_map, build_pois_table_data
 from lib.sun_orientation import build_sun_orientation_html
-from lib.documents import list_documents_in_store, upsert_pdf_to_qdrant
+from lib.documents import list_documents_in_store, upsert_pdf_to_qdrant, delete_document_from_store
 from lib.agents import run_orchestrator
 from lib.mcp_client import list_mcp_tools, register_default_mcp_tools
 
@@ -306,10 +306,25 @@ def _render_documents_tab() -> None:
     col_main, col_status = st.columns([2, 1])
     with col_main:
         st.markdown("#### Documents in Knowledge Base")
-        st.caption("List of indexed documents and chunk counts.")
+        st.caption("Indexed documents and chunk counts. Use **Remove** to delete a document and its embeddings from the vector store.")
         if docs:
-            table_data = [{"File Name": d["source"], "Chunks": d["chunk_count"], "Status": "✓ Indexed"} for d in docs]
-            st.dataframe(table_data, use_container_width=True, hide_index=True)
+            for i, d in enumerate(docs):
+                row_col1, row_col2, row_col3, row_col4 = st.columns([3, 1, 1, 1])
+                with row_col1:
+                    st.text(d["source"])
+                with row_col2:
+                    st.text(str(d["chunk_count"]))
+                with row_col3:
+                    st.caption("✓ Indexed")
+                with row_col4:
+                    if st.button("Remove", key=f"doc_remove_{i}", type="secondary"):
+                        try:
+                            delete_document_from_store(qdrant, QDRANT_COLLECTION, d["source"])
+                            st.success(f"Removed **{d['source']}** and its embeddings.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(str(e))
+            st.divider()
         else:
             st.info("No documents in the vector store yet. Run scripts/ingest_docs.py or upload a PDF below.")
         st.markdown("---")

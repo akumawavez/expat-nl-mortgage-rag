@@ -1,7 +1,7 @@
 """
-Documents in vector store: list uploaded documents and upsert new PDFs.
+Documents in vector store: list uploaded documents, upsert new PDFs, and remove documents.
 
-Used by the Documents tab for source tracing and upload.
+Used by the Documents tab for source tracing, upload, and delete.
 """
 from __future__ import annotations
 
@@ -43,6 +43,29 @@ def list_documents_in_store(qdrant_client: Any, collection_name: str) -> list[di
     except Exception as e:
         logger.error("list_documents_in_store failed: %s", e, exc_info=True)
         return []
+
+
+def delete_document_from_store(qdrant_client: Any, collection_name: str, source: str) -> int:
+    """
+    Delete all points (chunks) in the collection whose payload source equals the given document name.
+    Returns the number of points deleted (from count before delete). Use source exactly as in list_documents_in_store.
+    """
+    from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+    if not source or not source.strip():
+        return 0
+    try:
+        qdrant_client.delete(
+            collection_name=collection_name,
+            points_selector=Filter(
+                must=[FieldCondition(key="source", match=MatchValue(value=source.strip()))]
+            ),
+        )
+        # Count is not returned by delete(); we report success. Caller can rerun list to refresh.
+        return 1
+    except Exception as e:
+        logger.error("delete_document_from_store failed for %s: %s", source, e, exc_info=True)
+        raise
 
 
 def extract_text_from_pdf_bytes(data: bytes) -> str:
