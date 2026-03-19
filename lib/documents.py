@@ -5,11 +5,14 @@ Used by the Documents tab for source tracing and upload.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from io import BytesIO
 from typing import Any
 
 from pypdf import PdfReader
+
+logger = logging.getLogger(__name__)
 
 
 def list_documents_in_store(qdrant_client: Any, collection_name: str) -> list[dict[str, Any]]:
@@ -37,7 +40,8 @@ def list_documents_in_store(qdrant_client: Any, collection_name: str) -> list[di
             if offset is None:
                 break
         return [{"source": s, "chunk_count": c} for s, c in sorted(seen.items())]
-    except Exception:
+    except Exception as e:
+        logger.error("list_documents_in_store failed: %s", e, exc_info=True)
         return []
 
 
@@ -98,18 +102,26 @@ def upsert_pdf_to_qdrant(
     if not chunks:
         return 0
 
-    # Delete existing points for this source
-    qdrant_client.delete(
-        collection_name=collection_name,
-        points_selector=Filter(must=[FieldCondition(key="source", match=MatchValue(value=file_name))]),
-    )
+    try:
+        # Delete existing points for this source
+        qdrant_client.delete(
+            collection_name=collection_name,
+            points_selector=Filter(must=[FieldCondition(key="source", match=MatchValue(value=file_name))]),
+        )
+    except Exception as e:
+        logger.error("Failed to delete existing chunks for %s: %s", file_name, e, exc_info=True)
+        raise
 
     # Embed in batches
     batch_size = 100
     all_embeddings = []
     for i in range(0, len(chunks), batch_size):
         batch = [t if t.strip() else " " for t in chunks[i : i + batch_size]]
-        resp = embedding_client.embeddings.create(input=batch, model=embedding_model)
+        try:
+            resp = embedding_client.embeddings.create(input=batch, model=embedding_model)
+        except Exception as e:
+            logger.error("Embedding batch failed (rate limit or API error): %s", e, exc_info=True)
+            raise
         order = {e.index: e.embedding for e in resp.data}
         all_embeddings.extend([order[j] for j in range(len(batch))])
 
@@ -121,5 +133,9 @@ def upsert_pdf_to_qdrant(
         )
         for emb, chunk in zip(all_embeddings, chunks)
     ]
-    qdrant_client.upsert(collection_name=collection_name, points=points)
+    try:
+        qdrant_client.upsert(collection_name=collection_name, points=points)
+    except Exception as e:
+        logger.error("Upsert to Qdrant failed after delete (data loss risk): %s", e, exc_info=True)
+        raise
     return len(points)

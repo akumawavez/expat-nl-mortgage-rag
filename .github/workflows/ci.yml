@@ -7,6 +7,11 @@ on:
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
+    services:
+      qdrant:
+        image: qdrant/qdrant:latest
+        ports:
+          - 6333:6333
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -18,7 +23,7 @@ jobs:
           pip install -r requirements.txt
           pip install ruff pytest
       - name: Lint (ruff)
-        run: ruff check . --output-format=concise || true
+        run: ruff check . --output-format=concise
       - name: Test
         run: pytest
         env:
