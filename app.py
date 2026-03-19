@@ -372,11 +372,6 @@ def _render_documents_tab() -> None:
         st.caption("Retrieval Status: ✓ Healthy")
         st.caption(f"Embedding Model: {EMBEDDING_MODEL}")
         st.caption("Vector DB: Qdrant")
-        st.markdown("#### Knowledge Graph")
-        st.caption("Entities / Relations: see Knowledge Graph tab")
-        if st.button("View Graph", key="doc_view_kg"):
-            st.session_state["nav_page"] = "Knowledge Graph"
-            st.rerun()
 
 
 # ---------- Map tab: address + nearby facilities by category, route/distance, walk/bike/car ----------
