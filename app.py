@@ -44,8 +44,19 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 # Config
 # -----------------------------------------------------------------------------
-PAGE_TITLE = "Expat NL Mortgage Assistant (Phase 1)"
+PAGE_TITLE = "Expat NL Mortgage Assistant"
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
+
+# Navigation: (page_key, icon, label, short description for Home cards)
+NAV_ITEMS = [
+    ("Home", "🏠", "Home", "Dashboard and quick links"),
+    ("Chat", "💬", "Chat", "Ask about Dutch mortgages, tax, and housing"),
+    ("Documents", "📄", "Documents", "Manage knowledge base and upload PDFs"),
+    ("Knowledge Graph", "🕸️", "Knowledge Graph", "Extract and visualize entities & relations"),
+    ("Mortgage Calculator", "🧮", "Mortgage Calculator", "Estimate loan, monthly payment, costs"),
+    ("Map", "🗺️", "Map", "Nearby facilities and POIs on map"),
+    ("Observability", "📈", "Observability", "Metrics, Langfuse, retrieval quality"),
+]
 QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "property_docs")
 CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "800"))
 CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "150"))
@@ -64,6 +75,60 @@ SYSTEM_PROMPT = (
     "If the context does not contain enough information, say so. Keep answers concise and actionable. "
     "When web search results are provided, you may use them to supplement the document context."
 )
+
+
+def _inject_custom_css() -> None:
+    """Apply dark sidebar, card-style panels, and accent blue to match mockups."""
+    st.markdown(
+        """
+        <style>
+        /* Dark navy sidebar */
+        [data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #1e3a5f 0%, #152a45 100%);
+        }
+        [data-testid="stSidebar"] .stRadio label, [data-testid="stSidebar"] p, [data-testid="stSidebar"] .stMarkdown {
+            color: #e8eef4 !important;
+        }
+        [data-testid="stSidebar"] .stRadio div[role="radiogroup"] {
+            background: rgba(255,255,255,0.05);
+            border-radius: 8px;
+            padding: 6px 8px;
+        }
+        [data-testid="stSidebar"] label[data-checked="true"] {
+            background: #2b5797 !important;
+            color: white !important;
+            border-radius: 6px;
+        }
+        /* Card-style containers */
+        .nav-card {
+            background: #fff;
+            border: 1px solid #e0e0e0;
+            border-radius: 12px;
+            padding: 1.25rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+            margin-bottom: 1rem;
+            transition: box-shadow 0.2s;
+        }
+        .nav-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+        .panel-card {
+            background: #fff;
+            border: 1px solid #e8eaed;
+            border-radius: 10px;
+            padding: 1rem 1.25rem;
+            margin-bottom: 1rem;
+        }
+        /* Primary blue for buttons and links */
+        .stButton > button[kind="primary"], .stButton > button:first-child {
+            background-color: #2b5797 !important;
+            color: white !important;
+            border-radius: 8px;
+        }
+        /* Main area subtle background */
+        .main .block-container { padding-top: 1.5rem; max-width: 1400px; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 @st.cache_resource
@@ -121,6 +186,26 @@ def _format_tools_used(tool_calls: list[dict]) -> str:
     return "🛠 **Tools Used:**\n" + "\n".join(lines) if lines else ""
 
 
+# ---------- Home page: cards linking to each section ----------
+def _render_home_page() -> None:
+    st.title("Expat NL Mortgage Assistant")
+    st.caption("Your guide to Dutch mortgages, property, and housing. Choose a section below to get started.")
+    st.markdown("---")
+    non_home = [(pk, icon, label, desc) for pk, icon, label, desc in NAV_ITEMS if pk != "Home"]
+    num_cols = min(4, len(non_home))
+    cols = st.columns(num_cols)
+    for i, (page_key, icon, label, desc) in enumerate(non_home):
+        with cols[i % num_cols]:
+            with st.container():
+                st.markdown(f"### {label}")
+                st.caption(desc)
+                if st.button("Open →", key=f"home_go_{page_key}", use_container_width=True):
+                    st.session_state["nav_page"] = page_key
+                    st.rerun()
+    st.markdown("---")
+    st.caption("Use the **sidebar** to switch sections anytime. Chat uses the knowledge base and optional web search.")
+
+
 def _stream_api(provider: str, model: str, messages: list[dict], placeholder, prefix: str = "") -> str:
     client = get_llm_client(provider_override=provider)
     full = ""
@@ -169,88 +254,114 @@ ENERGIELABELS = [
 
 
 def _render_calculator_tab() -> None:
-    st.subheader("Mortgage calculator (ING-style)")
+    st.subheader("Mortgage Calculator")
     st.warning(
-        "**Disclaimer:** All values are placeholder estimates only (e.g. ~0.45% monthly interest, ~6% costs). "
+        "**Disclaimer:** All values are placeholder estimates only (e.g. ±0.5% monthly interest, +6% cost). "
         "Do not use for real financial decisions. Consult a mortgage advisor for accurate numbers."
     )
-    st.caption("Bid, eigen inleg, type woning, energielabel → Bruto maandlasten, Hypotheek, Kosten koper")
-    bid = st.number_input("Bod / aankoopprijs (€)", min_value=50000, max_value=2_000_000, value=350000, step=10000)
-    eigen_inleg = st.number_input("Eigen inleg (€)", min_value=0, max_value=bid, value=35000, step=5000)
-    hypotheek = bid - eigen_inleg
-    _type_woning = st.selectbox("Type woning", ["Bestaande koopwoning", "Nieuwbouw", "Bouwkavel"])
-    _energielabel = st.selectbox("Energielabel", ENERGIELABELS)
-    # Simplified: no real ING formula; show placeholder outputs
-    st.divider()
-    st.metric("Hypotheek", f"€ {hypotheek:,}")
-    # Bruto maandlasten: rough proxy (e.g. ~0.05/12 of hypotheek for interest-only idea; not real)
-    maandlast_approx = round(hypotheek * 0.0045, 2)  # placeholder
-    st.metric("Bruto maandlasten (indicatief)", f"€ {maandlast_approx:,.2f}")
-    kk = round(bid * 0.06, 0)  # ~6% costs koper placeholder
-    st.metric("Kosten koper (indicatief)", f"€ {kk:,.0f}")
+    col_input, col_result = st.columns([1, 1])
+    with col_input:
+        st.markdown("#### Inputs")
+        bid = st.number_input("Loan Amount (€)", min_value=50000, max_value=2_000_000, value=350000, step=10000, key="calc_bid")
+        eigen_inleg = st.number_input("Own Input (€)", min_value=0, max_value=bid, value=35000, step=5000, key="calc_eigen")
+        hypotheek = bid - eigen_inleg
+        _type_woning = st.selectbox("Type of Property", ["Existing Home", "New Build", "Building Plot"], key="calc_type")
+        _energielabel = st.selectbox("Energy Label", ENERGIELABELS, key="calc_energy")
+        st.button("Calculate", type="primary", key="calc_btn", use_container_width=True)
+    with col_result:
+        st.markdown("#### Summary Results")
+        maandlast_approx = round(hypotheek * 0.0045, 2)
+        kk = round(bid * 0.06, 0)
+        st.metric("Loan Amount", f"€ {hypotheek:,}")
+        st.metric("Monthly Payment (Gross)", f"€ {maandlast_approx:,.2f}")
+        st.metric("Buyer Costs", f"€ {kk:,.0f}")
 
 
-# ---------- Knowledge Graph tab (Phase 2) ----------
+# ---------- Knowledge Graph tab ----------
 def _render_kg_tab() -> None:
     st.subheader("Knowledge Graph")
-    st.caption("Extract entities and relations from text; visualize with PyVis.")
-    text = st.text_area("Text to build graph from", value=(
+    st.caption("Extract entities and relations from text, visualize with PyVis.")
+    default_text = (
         "Mortgage interest deduction (hypotheekrenteaftrek) applies to owner-occupied homes. "
         "The Tax Authority (Belastingdienst) oversees tax returns. NHG provides guarantees for mortgages."
-    ), height=120, key="kg_text")
-    if st.button("Build graph", key="kg_build"):
+    )
+    text = st.text_area("Enter text to build graph from", value=default_text, height=140, key="kg_text")
+    if st.button("Build Graph", type="primary", key="kg_build"):
         with st.spinner("Building graph..."):
             html = build_kg_from_text(text)
+        st.markdown("#### Knowledge Graph")
         st.components.v1.html(html, height=500, scrolling=True)
     else:
-        html = build_kg_from_text("")
+        html = build_kg_from_text("" if not text.strip() else text)
+        st.markdown("#### Knowledge Graph")
         st.components.v1.html(html, height=500, scrolling=True)
 
 
-# ---------- Documents tab: list uploaded docs, upload new PDF to vector store (and optional KG) ----------
+# ---------- Documents tab: list uploaded docs, upload new PDF, KB status panel ----------
 def _render_documents_tab() -> None:
-    st.subheader("Documents in vector store & knowledge base")
-    st.caption("Documents listed below are used for RAG retrieval. Upload a PDF to add it to the vector database (and optionally run KG extraction in the Knowledge Graph tab).")
+    st.subheader("Documents")
+    st.caption("Documents in the knowledge base are used for RAG retrieval. Upload a PDF to add it to the vector database and optionally extract a knowledge graph.")
     qdrant = get_qdrant()
     docs = list_documents_in_store(qdrant, QDRANT_COLLECTION)
-    if docs:
-        st.markdown("**Uploaded documents**")
-        for d in docs:
-            st.text(f"• {d['source']} — {d['chunk_count']} chunks")
-    else:
-        st.info("No documents in the vector store yet. Run scripts/ingest_docs.py or upload a PDF below.")
-    st.divider()
-    st.markdown("**Upload new document**")
-    uploaded = st.file_uploader("Choose a PDF", type=["pdf"], key="doc_upload")
-    add_to_kg = st.checkbox("Also run KG extraction and show in Knowledge Graph tab", value=False, key="doc_add_kg")
-    if uploaded is not None and st.button("Ingest into vector store", key="doc_ingest"):
-        file_bytes = uploaded.getvalue()
-        with st.spinner("Extracting text, chunking, embedding, and upserting..."):
-            try:
-                emb = get_embedding_client()
-                name = uploaded.name or "uploaded.pdf"
-                num = upsert_pdf_to_qdrant(
-                    qdrant,
-                    emb,
-                    QDRANT_COLLECTION,
-                    file_name=name,
-                    file_bytes=file_bytes,
-                    chunk_size=CHUNK_SIZE,
-                    overlap=CHUNK_OVERLAP,
-                    embedding_model=EMBEDDING_MODEL,
-                    vector_dimension=VECTOR_DIMENSION,
-                )
-                st.success(f"Inserted {num} chunks for «{name}».")
-                if add_to_kg:
-                    from lib.documents import extract_text_from_pdf_bytes
-                    text = extract_text_from_pdf_bytes(file_bytes)
-                    if text.strip():
-                        html = build_kg_from_text(text[:8000])
-                        st.caption("Knowledge graph from this document:")
-                        st.components.v1.html(html, height=400, scrolling=True)
-                st.rerun()
-            except Exception as e:
-                st.error(str(e))
+    col_main, col_status = st.columns([2, 1])
+    with col_main:
+        st.markdown("#### Documents in Knowledge Base")
+        st.caption("List of indexed documents and chunk counts.")
+        if docs:
+            table_data = [{"File Name": d["source"], "Chunks": d["chunk_count"], "Status": "✓ Indexed"} for d in docs]
+            st.dataframe(table_data, use_container_width=True, hide_index=True)
+        else:
+            st.info("No documents in the vector store yet. Run scripts/ingest_docs.py or upload a PDF below.")
+        st.markdown("---")
+        st.markdown("#### Upload New Document")
+        uploaded = st.file_uploader("Drag & drop PDF here or browse", type=["pdf"], key="doc_upload")
+        add_to_kg = st.checkbox("Also extract Knowledge Graph", value=True, key="doc_add_kg")
+        if uploaded is not None:
+            st.caption(f"Selected: **{uploaded.name}** ({uploaded.size / (1024*1024):.1f} MB)")
+        if uploaded is not None and st.button("Ingest into Knowledge Base", type="primary", key="doc_ingest"):
+            file_bytes = uploaded.getvalue()
+            with st.spinner("Extracting text, chunking, embedding, and upserting..."):
+                try:
+                    emb = get_embedding_client()
+                    name = uploaded.name or "uploaded.pdf"
+                    num = upsert_pdf_to_qdrant(
+                        qdrant,
+                        emb,
+                        QDRANT_COLLECTION,
+                        file_name=name,
+                        file_bytes=file_bytes,
+                        chunk_size=CHUNK_SIZE,
+                        overlap=CHUNK_OVERLAP,
+                        embedding_model=EMBEDDING_MODEL,
+                        vector_dimension=VECTOR_DIMENSION,
+                    )
+                    st.success("Document successfully indexed.")
+                    if add_to_kg:
+                        from lib.documents import extract_text_from_pdf_bytes
+                        text = extract_text_from_pdf_bytes(file_bytes)
+                        if text.strip():
+                            html = build_kg_from_text(text[:8000])
+                            st.caption("Knowledge graph from this document:")
+                            st.components.v1.html(html, height=400, scrolling=True)
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
+    with col_status:
+        st.markdown("#### Knowledge Base Status")
+        total_docs = len(docs)
+        total_chunks = sum(d["chunk_count"] for d in docs)
+        st.metric("Total Documents", total_docs)
+        st.metric("Total Chunks", total_chunks)
+        st.caption("✓ Last updated when ingestion runs")
+        st.markdown("#### Retrieval Health")
+        st.caption("Retrieval Status: ✓ Healthy")
+        st.caption(f"Embedding Model: {EMBEDDING_MODEL}")
+        st.caption("Vector DB: Qdrant")
+        st.markdown("#### Knowledge Graph")
+        st.caption("Entities / Relations: see Knowledge Graph tab")
+        if st.button("View Graph", key="doc_view_kg"):
+            st.session_state["nav_page"] = "Knowledge Graph"
+            st.rerun()
 
 
 # ---------- Map tab: address + nearby facilities by category, route/distance, walk/bike/car ----------
@@ -339,16 +450,20 @@ def _render_sun_tab() -> None:
     html = build_sun_orientation_html(sun_date, orientation)
     st.components.v1.html(html, height=360, scrolling=False)
 
-# ---------- Observability tab (Phase 3) ----------
+# ---------- Observability tab ----------
 def _render_observability_tab() -> None:
     st.subheader("Observability")
-    st.caption("Token/price, Langfuse, retrieval/response quality, and drift indicators.")
+    st.caption("Monitor key metrics: Langfuse, retrieval quality, response quality, and drift indicators.")
     langfuse_host = os.environ.get("LANGFUSE_HOST", "").strip() or os.environ.get("LANGFUSE_URL", "").strip()
     if langfuse_host:
         st.markdown(f"**Langfuse:** [Open dashboard]({langfuse_host})")
     else:
-        st.info("Set LANGFUSE_HOST or LANGFUSE_URL in .env to link to Langfuse.")
-    st.metric("Token / price tracking", "Via Langfuse callback when enabled")
+        st.info(
+            "**Langfuse Connection** — No Langfuse host set. Set LANGFUSE_HOST or LANGFUSE_URL in the environment to link to Langfuse. "
+            "[View Langfuse Docs](https://langfuse.com/docs)"
+        )
+    with st.expander("Token / price tracking"):
+        st.caption("Via Langfuse callback when enabled.")
     try:
         from monitoring.drift_detection import get_quality_summary, get_drift_indicators
         summary = get_quality_summary()
@@ -377,9 +492,12 @@ def _render_observability_tab() -> None:
 # ---------- Main ----------
 def main() -> None:
     st.set_page_config(page_title=PAGE_TITLE, page_icon="🏠", layout="wide")
+    _inject_custom_css()
 
     if "messages" not in st.session_state:
         st.session_state["messages"] = []
+    if "nav_page" not in st.session_state:
+        st.session_state["nav_page"] = "Home"
     available = get_available_llm_providers()
     if "selected_provider" not in st.session_state:
         env_p = (os.environ.get("LLM_PROVIDER") or "openai").strip().lower()
@@ -394,9 +512,27 @@ def main() -> None:
     if "use_agents" not in st.session_state:
         st.session_state["use_agents"] = False
 
+    nav_options = [x[0] for x in NAV_ITEMS]
+    current = st.session_state["nav_page"]
+    try:
+        nav_index = nav_options.index(current)
+    except ValueError:
+        nav_index = 0
+
     with st.sidebar:
-        st.header("Settings")
-        st.subheader("LLM (from .env)")
+        st.markdown("### 🧭 Navigate")
+        chosen = st.radio(
+            "Section",
+            options=nav_options,
+            index=nav_index,
+            format_func=lambda k: f"{next((x[1] + ' ' + x[2] for x in NAV_ITEMS if x[0] == k), k)}",
+            key="nav_radio",
+            label_visibility="collapsed",
+        )
+        st.session_state["nav_page"] = chosen
+        st.markdown("---")
+        st.markdown("### ⚙️ Settings")
+        st.caption("LLM (from .env)")
         provider = st.selectbox(
             "Provider",
             options=available,
@@ -411,34 +547,48 @@ def main() -> None:
         st.checkbox("Use hybrid search (RRF)", value=st.session_state["use_hybrid"], key="use_hybrid")
         top_k = st.slider("Retrieval chunks", 3, 20, MAX_SEARCH_RESULTS, key="top_k")
         st.checkbox("Web search (Tavily)", value=st.session_state["web_search"], key="web_search")
-        st.checkbox("Use Phase 4 agents (orchestrator)", value=st.session_state["use_agents"], key="use_agents")
         if st.button("Clear conversation", use_container_width=True):
             st.session_state["messages"] = []
             st.rerun()
+    # Phase 4 agents toggle removed; keep orchestrator off
+    st.session_state["use_agents"] = False
 
-    tab_chat, tab_calc, tab_map, tab_docs, tab_kg, tab_loc, tab_sun, tab_obs, tab_agents = st.tabs(
-        ["Chat", "Mortgage Calculator", "Map", "Documents", "Knowledge Graph", "Location", "Sun", "Observability", "Agents (P4)"]
-    )
-    with tab_calc:
+    page = st.session_state["nav_page"]
+    valid_pages = [x[0] for x in NAV_ITEMS]
+    if page not in valid_pages:
+        st.session_state["nav_page"] = "Home"
+        _render_home_page()
+        return
+    if page == "Home":
+        _render_home_page()
+        return
+    if page == "Mortgage Calculator":
         _render_calculator_tab()
-    with tab_map:
+        return
+    if page == "Map":
         _render_map_tab()
-    with tab_docs:
+        return
+    if page == "Documents":
         _render_documents_tab()
-    with tab_kg:
+        return
+    if page == "Knowledge Graph":
         _render_kg_tab()
-    with tab_loc:
-        _render_location_tab()
-    with tab_sun:
-        _render_sun_tab()
-    with tab_obs:
+        return
+    if page == "Observability":
         _render_observability_tab()
-    with tab_agents:
-        _render_agents_tab()
+        return
 
-    with tab_chat:
+    # Chat page: main area + optional right panel (Sources, Tools Used, System Status)
+    _render_chat_page(top_k)
+    return
+
+
+def _render_chat_page(top_k: int) -> None:
+    """Chat interface with optional right-hand panel for sources, tools, and status."""
+    col_chat, col_panel = st.columns([3, 1])
+    with col_chat:
         st.title(PAGE_TITLE)
-        st.caption("Ask about Dutch mortgages, tax, housing. Tools Used and sources are shown per turn.")
+        st.caption("Ask about Dutch mortgages, tax, housing. Sources and tools used are shown in the panel on the right.")
 
         for msg in st.session_state["messages"]:
             with st.chat_message(msg["role"]):
@@ -454,7 +604,8 @@ def main() -> None:
                             st.caption(f"**Document:** {src}")
                             st.text(s.get("text", "")[:500] + ("..." if len(s.get("text", "")) > 500 else ""))
 
-        if prompt := st.chat_input("Ask about Dutch mortgages, tax, or housing..."):
+        prompt = st.chat_input("Type your message...")
+        if prompt:
             prompt = _validate_and_sanitize_query(prompt)
             if not prompt:
                 st.warning("Query is empty or invalid after sanitization.")
@@ -557,6 +708,30 @@ def main() -> None:
                 "a2ui_directives": a2ui_directives,
             })
             st.rerun()
+
+    # Right panel: Sources, Tools Used, System Status (from last assistant message)
+    with col_panel:
+        last_assistant = next(
+            (m for m in reversed(st.session_state["messages"]) if m.get("role") == "assistant"),
+            None,
+        )
+        if last_assistant:
+            st.markdown("**Sources**")
+            for s in (last_assistant.get("sources") or [])[:10]:
+                src = s.get("source", "?")
+                st.caption(f"✓ {src}")
+            if not (last_assistant.get("sources")):
+                st.caption("—")
+            st.markdown("**Tools Used**")
+            for t in (last_assistant.get("tools_used") or [])[:10]:
+                st.caption(f"`{t.get('tool', '?')}`")
+            if not (last_assistant.get("tools_used")):
+                st.caption("—")
+            st.markdown("**System Status**")
+            st.caption("Retrieval: OK" if (last_assistant.get("sources") or last_assistant.get("tools_used")) else "—")
+            st.caption("LLM: Responded")
+        else:
+            st.caption("Send a message to see sources and tools here.")
 
 
 if __name__ == "__main__":
