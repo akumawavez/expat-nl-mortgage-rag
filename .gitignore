@@ -3,3 +3,8 @@
 __pycache__
 *.pyc
 NotesToImprove.txt
+
+# Project docs (local / review)
+code_critique.pdf
+final_presentation.pdf
+EXECUTION_SUMMARY.md
