@@ -153,10 +153,14 @@ def get_embedding(client, text: str) -> list[float]:
     return resp.data[0].embedding
 
 
-def _tavily_search(query: str, max_results: int = 5) -> tuple[str, list[dict]]:
-    """Return (context_string, tool_calls_for_ui). If no key or error, returns ('', [])."""
+def _tavily_search(query: str, max_results: int = 5) -> tuple[str, list[dict], list[dict]]:
+    """
+    Return (context_string, tool_calls_for_ui, web_sources_for_tracing).
+    web_sources: list of {"source": "[Web] Title", "text": content, "url": url} for source panel.
+    If no key or error, returns ('', [], []).
+    """
     if not os.environ.get("TAVILY_API_KEY"):
-        return "", []
+        return "", [], []
     try:
         from tavily import TavilyClient
         client = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
@@ -164,16 +168,23 @@ def _tavily_search(query: str, max_results: int = 5) -> tuple[str, list[dict]]:
         results = getattr(response, "results", response) if hasattr(response, "results") else []
         if isinstance(results, list):
             parts = []
+            web_sources = []
             for r in results:
-                title = r.get("title", "")
+                title = r.get("title", "").strip() or "Web result"
                 url = r.get("url", "")
                 content = r.get("content", "")
                 if content:
                     parts.append(f"[{title}]({url})\n{content}")
-            return "\n\n".join(parts), [{"tool": "tavily_search", "args": {"query": query[:80]}}]
+                    web_sources.append({
+                        "source": f"[Web] {title}",
+                        "text": content[:2000] + ("..." if len(content) > 2000 else ""),
+                        "url": url,
+                    })
+            tool_calls = [{"tool": "tavily_search", "args": {"query": query[:80]}}] if parts else []
+            return "\n\n".join(parts), tool_calls, web_sources
     except Exception as e:
         logger.warning("Tavily web search failed: %s", e, exc_info=True)
-    return "", []
+    return "", [], []
 
 
 def _format_tools_used(tool_calls: list[dict]) -> str:
@@ -608,10 +619,15 @@ def _render_chat_page(top_k: int) -> None:
                 if msg["role"] == "assistant" and msg.get("a2ui_directives"):
                     st.caption("**A2UI:** " + ", ".join(d.get("type", "") for d in msg["a2ui_directives"]))
                 if msg["role"] == "assistant" and msg.get("sources"):
-                    with st.expander("Source tracing (documents used for this answer)"):
+                    with st.expander("Source tracing (documents & web search used for this answer)"):
                         for s in msg["sources"]:
                             src = s.get("source", "?")
-                            st.caption(f"**Document:** {src}")
+                            url = s.get("url")
+                            if url:
+                                link_text = src.replace("[Web] ", "") if src.startswith("[Web] ") else src
+                                st.caption(f"**Web:** [{link_text}]({url})")
+                            else:
+                                st.caption(f"**Document:** {src}")
                             st.text(s.get("text", "")[:500] + ("..." if len(s.get("text", "")) > 500 else ""))
 
         prompt = st.chat_input("Type your message...")
@@ -678,13 +694,16 @@ def _render_chat_page(top_k: int) -> None:
                     chunks, tool_calls = [], [{"tool": "vector_search", "args": {"error": str(e)}}]
                 context = "\n\n---\n\n".join(c.get("text", "") for c in chunks) if chunks else ""
 
-            # Optional Tavily
+            # Optional Tavily (web search) with source tracing
+            web_sources: list[dict] = []
             if st.session_state["web_search"]:
-                web_ctx, web_tools = _tavily_search(prompt)
+                web_ctx, web_tools, web_sources = _tavily_search(prompt)
                 if web_tools:
                     tool_calls.extend(web_tools)
                 if web_ctx:
                     context = (context + "\n\n--- Web search ---\n\n" + web_ctx) if context else web_ctx
+            # Merge document chunks and web sources for the Sources panel and expander
+            sources_for_message = chunks + web_sources
 
             if context:
                 user_content = "Use the following context to answer. If not in context, say so.\n\nContext:\n" + context + "\n\nQuestion: " + prompt
@@ -714,7 +733,7 @@ def _render_chat_page(top_k: int) -> None:
                 "role": "assistant",
                 "content": answer,
                 "tools_used": tool_calls,
-                "sources": chunks,
+                "sources": sources_for_message,
                 "a2ui_directives": a2ui_directives,
             })
             # Flush Langfuse so traces appear in the dashboard promptly
@@ -735,7 +754,12 @@ def _render_chat_page(top_k: int) -> None:
             st.markdown("**Sources**")
             for s in (last_assistant.get("sources") or [])[:10]:
                 src = s.get("source", "?")
-                st.caption(f"✓ {src}")
+                url = s.get("url")
+                if url:
+                    link_text = src.replace("[Web] ", "") if src.startswith("[Web] ") else src
+                    st.caption(f"✓ [{link_text}]({url})")
+                else:
+                    st.caption(f"✓ {src}")
             if not (last_assistant.get("sources")):
                 st.caption("—")
             st.markdown("**Tools Used**")
