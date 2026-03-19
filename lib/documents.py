@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PDF_STORE_DIR = PROJECT_ROOT / "data" / "pdfs"
+PDF_SEARCH_DIRS = [
+    PROJECT_ROOT / "data",
+    PROJECT_ROOT / "docs",
+    PROJECT_ROOT,
+]
 
 
 def list_documents_in_store(qdrant_client: Any, collection_name: str) -> list[dict[str, Any]]:
@@ -82,15 +87,38 @@ def delete_document_from_store(qdrant_client: Any, collection_name: str, source:
 
 
 def load_pdf_bytes_from_store(source: str) -> bytes | None:
-    """Load the original PDF bytes saved during ingestion for UI preview."""
+    """
+    Load PDF bytes for UI preview.
+    First checks data/pdfs (saved on ingestion), then falls back to common project folders
+    to support older docs ingested before PDF persistence was added.
+    """
     if not source or not source.strip():
         return None
-    pdf_path = PDF_STORE_DIR / source.strip()
+    source_name = source.strip()
+    pdf_path = PDF_STORE_DIR / source_name
     try:
         if pdf_path.exists():
             return pdf_path.read_bytes()
     except Exception:
         logger.warning("Failed to read saved pdf: %s", pdf_path, exc_info=True)
+
+    # Fallback for older ingestions: search common dirs for same filename.
+    for base_dir in PDF_SEARCH_DIRS:
+        if not base_dir.exists():
+            continue
+        candidate = base_dir / source_name
+        try:
+            if candidate.exists() and candidate.is_file():
+                return candidate.read_bytes()
+        except Exception:
+            logger.warning("Failed reading candidate pdf: %s", candidate, exc_info=True)
+        try:
+            matches = list(base_dir.rglob(source_name))
+            for m in matches:
+                if m.is_file() and m.suffix.lower() == ".pdf":
+                    return m.read_bytes()
+        except Exception:
+            logger.warning("Fallback pdf lookup failed under %s", base_dir, exc_info=True)
     return None
 
 

@@ -173,17 +173,22 @@ def _tavily_search(query: str, max_results: int = 5) -> tuple[str, list[dict], l
             for r in results:
                 title = r.get("title", "").strip() or "Web result"
                 url = r.get("url", "")
-                content = r.get("content", "")
+                # Tavily may return empty `content` for some results; fallback to snippets.
+                content = (r.get("content") or r.get("snippet") or r.get("raw_content") or "").strip()
                 if content:
                     parts.append(f"[{title}]({url})\n{content}")
+                elif url:
+                    # Keep URL in context so the LLM can still reference source when snippet is empty.
+                    parts.append(f"[{title}]({url})")
+                if url or content:
                     web_sources.append({
                         "type": "web",
                         "title": title,
                         "source": title,
-                        "text": content[:2000] + ("..." if len(content) > 2000 else ""),
+                        "text": (content[:2000] + ("..." if len(content) > 2000 else "")) if content else "",
                         "url": url,
                     })
-            tool_calls = [{"tool": "tavily_search", "args": {"query": query[:80]}}] if parts else []
+            tool_calls = [{"tool": "tavily_search", "args": {"query": query[:80], "results": len(web_sources)}}] if web_sources else []
             return "\n\n".join(parts), tool_calls, web_sources
     except Exception as e:
         logger.warning("Tavily web search failed: %s", e, exc_info=True)
@@ -762,8 +767,8 @@ def _render_chat_page(top_k: int) -> None:
                     tool_calls.extend(web_tools)
                 if web_ctx:
                     context = (context + "\n\n--- Web search ---\n\n" + web_ctx) if context else web_ctx
-            # Merge document chunks and web sources for the Sources panel and expander
-            sources_for_message = chunks + web_sources
+            # Merge web and document sources for citation panels (web first so they are visible in top-N list)
+            sources_for_message = web_sources + chunks
 
             if context:
                 user_content = "Use the following context to answer. If not in context, say so.\n\nContext:\n" + context + "\n\nQuestion: " + prompt
