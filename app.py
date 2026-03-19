@@ -161,12 +161,15 @@ def _tavily_search(query: str, max_results: int = 5) -> tuple[str, list[dict], l
     If no key or error, returns ('', [], []).
     """
     if not os.environ.get("TAVILY_API_KEY"):
-        return "", [], []
+        return "", [{"tool": "tavily_search", "args": {"status": "skipped_no_api_key"}}], []
     try:
         from tavily import TavilyClient
         client = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
         response = client.search(query, max_results=max_results)
-        results = getattr(response, "results", response) if hasattr(response, "results") else []
+        if isinstance(response, dict):
+            results = response.get("results", [])
+        else:
+            results = getattr(response, "results", response) if hasattr(response, "results") else []
         if isinstance(results, list):
             parts = []
             web_sources = []
@@ -188,11 +191,26 @@ def _tavily_search(query: str, max_results: int = 5) -> tuple[str, list[dict], l
                         "text": (content[:2000] + ("..." if len(content) > 2000 else "")) if content else "",
                         "url": url,
                     })
-            tool_calls = [{"tool": "tavily_search", "args": {"query": query[:80], "results": len(web_sources)}}] if web_sources else []
+            tool_calls = [{"tool": "tavily_search", "args": {"query": query[:80], "results": len(web_sources)}}]
             return "\n\n".join(parts), tool_calls, web_sources
     except Exception as e:
         logger.warning("Tavily web search failed: %s", e, exc_info=True)
-    return "", [], []
+        return "", [{"tool": "tavily_search", "args": {"status": "error", "error": str(e)[:120]}}], []
+    return "", [{"tool": "tavily_search", "args": {"status": "no_results"}}], []
+
+
+def _has_query_signal_in_docs(prompt: str, chunks: list[dict]) -> bool:
+    """
+    Heuristic: returns True if at least one meaningful prompt token appears in retrieved docs.
+    Used to decide when to explicitly prioritize web context.
+    """
+    if not prompt or not chunks:
+        return False
+    tokens = [t for t in re.findall(r"[A-Za-z0-9]{3,}", prompt.lower()) if t not in {"what", "when", "where", "which", "about", "does", "have", "with", "from"}]
+    if not tokens:
+        return True
+    joined = " ".join((c.get("text", "") or "").lower() for c in chunks[:5])
+    return any(t in joined for t in tokens)
 
 
 def _format_tools_used(tool_calls: list[dict]) -> str:
@@ -575,6 +593,7 @@ def main() -> None:
         st.session_state["selected_model"] = model
         st.checkbox("Use hybrid search (RRF)", value=st.session_state["use_hybrid"], key="use_hybrid")
         top_k = st.slider("Retrieval chunks", 3, 20, MAX_SEARCH_RESULTS, key="top_k")
+        st.caption("Controls how many retrieved chunks are sent as context. Higher values can improve recall but may add noise and latency.")
         st.checkbox("Web search (Tavily)", value=st.session_state["web_search"], key="web_search")
         if st.button("Clear conversation", use_container_width=True):
             st.session_state["messages"] = []
@@ -653,6 +672,14 @@ def _render_chat_page(top_k: int) -> None:
                 st.write(msg["content"])
                 if msg["role"] == "assistant" and msg.get("a2ui_directives"):
                     st.caption("**A2UI:** " + ", ".join(d.get("type", "") for d in msg["a2ui_directives"]))
+                if msg["role"] == "assistant":
+                    web_fallback = msg.get("web_fallback_used")
+                    web_count = msg.get("web_sources_count")
+                    if web_fallback is not None or web_count is not None:
+                        st.caption(
+                            f"**Web fallback used:** {'Yes' if web_fallback else 'No'} | "
+                            f"**Web sources found:** {int(web_count or 0)}"
+                        )
                 if msg["role"] == "assistant" and msg.get("sources"):
                     sources = msg.get("sources") or []
                     with st.expander("Citations (documents + web search)"):
@@ -759,19 +786,41 @@ def _render_chat_page(top_k: int) -> None:
                     chunks, tool_calls = [], [{"tool": "vector_search", "args": {"error": str(e)}}]
                 context = "\n\n---\n\n".join(c.get("text", "") for c in chunks) if chunks else ""
 
+            doc_context = context
+
             # Optional Tavily (web search) with source tracing
             web_sources: list[dict] = []
+            web_ctx = ""
             if st.session_state["web_search"]:
                 web_ctx, web_tools, web_sources = _tavily_search(prompt)
                 if web_tools:
                     tool_calls.extend(web_tools)
-                if web_ctx:
-                    context = (context + "\n\n--- Web search ---\n\n" + web_ctx) if context else web_ctx
+            if web_ctx:
+                context = (doc_context + "\n\n--- Web search ---\n\n" + web_ctx) if doc_context else web_ctx
             # Merge web and document sources for citation panels (web first so they are visible in top-N list)
             sources_for_message = web_sources + chunks
 
+            docs_have_signal = _has_query_signal_in_docs(prompt, chunks)
+            web_fallback_used = bool(web_ctx) and not docs_have_signal
+            web_sources_count = len(web_sources)
             if context:
-                user_content = "Use the following context to answer. If not in context, say so.\n\nContext:\n" + context + "\n\nQuestion: " + prompt
+                if web_ctx and not docs_have_signal:
+                    user_content = (
+                        "Use the context below to answer.\n"
+                        "Document context appears insufficient for this question, so prioritize WEB SEARCH CONTEXT.\n"
+                        "If web and documents conflict, prefer newer official web information and state that clearly.\n\n"
+                        "DOCUMENT CONTEXT:\n"
+                        + (doc_context or "(none)") +
+                        "\n\nWEB SEARCH CONTEXT:\n" + web_ctx +
+                        "\n\nQuestion: " + prompt
+                    )
+                else:
+                    user_content = (
+                        "Use the context below to answer. Use document context first, and web context as supplement when needed.\n\n"
+                        "DOCUMENT CONTEXT:\n" + (doc_context or "(none)") +
+                        "\n\nWEB SEARCH CONTEXT:\n" + (web_ctx or "(none)") +
+                        "\n\nQuestion: " + prompt
+                    )
             else:
                 user_content = "No document context found. Answer from general knowledge and suggest loading documents (python scripts/ingest_docs.py).\n\nQuestion: " + prompt
 
@@ -800,6 +849,8 @@ def _render_chat_page(top_k: int) -> None:
                 "tools_used": tool_calls,
                 "sources": sources_for_message,
                 "a2ui_directives": a2ui_directives,
+                "web_fallback_used": web_fallback_used,
+                "web_sources_count": web_sources_count,
             })
             # Flush Langfuse so traces appear in the dashboard promptly
             try:
