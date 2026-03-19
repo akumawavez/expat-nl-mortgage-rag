@@ -7,8 +7,6 @@ Returns combined context, tool_calls, and optional A2UI directives.
 """
 from __future__ import annotations
 
-from typing import Any
-
 # Specialist names for tool-usage visibility
 SPEC_RETRIEVAL = "retrieval_agent"
 SPEC_LOCATION = "location_agent"

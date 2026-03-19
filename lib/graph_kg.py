@@ -7,7 +7,6 @@ PyVis HTML generation for the KG tab.
 from __future__ import annotations
 
 import re
-from typing import Any
 
 # Default sample for demo when no text provided
 SAMPLE_TEXT = (

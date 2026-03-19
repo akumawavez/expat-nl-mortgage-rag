@@ -1,5 +1,4 @@
 """Tests for mortgage calculator logic (ING-style outputs)."""
-import pytest
 
 
 def test_calculator_hypotheek():

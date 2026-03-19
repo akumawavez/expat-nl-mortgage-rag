@@ -31,15 +31,15 @@ if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 os.chdir(_project_root)
 
-import dotenv
+import dotenv  # noqa: E402
 dotenv.load_dotenv(_project_root / ".env")
 
-from pypdf import PdfReader
-from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
+from pypdf import PdfReader  # noqa: E402
+from qdrant_client import QdrantClient  # noqa: E402
+from qdrant_client.models import Distance, VectorParams, PointStruct  # noqa: E402
 
-from lib.chunking import chunk_text as chunk_text_lib
-from lib.provider import get_llm_client, get_embedding_client
+from lib.chunking import chunk_text as chunk_text_lib  # noqa: E402
+from lib.provider import get_llm_client, get_embedding_client  # noqa: E402
 
 
 # -----------------------------------------------------------------------------

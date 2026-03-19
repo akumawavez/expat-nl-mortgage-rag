@@ -7,8 +7,7 @@ Output: SVG or HTML string for embedding in Streamlit.
 from __future__ import annotations
 
 import math
-from datetime import date, datetime, time, timedelta
-from typing import Optional
+from datetime import date
 
 # Amsterdam default
 DEFAULT_LAT = 52.37
@@ -79,7 +78,7 @@ def build_sun_path_svg(
     Build an SVG showing sun path (elevation vs time) and building orientation.
     Orientation selects which way the building faces; we draw sun positions through the day.
     """
-    facing_az = ORIENTATION_AZIMUTH.get(orientation, 180)
+    _ = ORIENTATION_AZIMUTH.get(orientation, 180)  # orientation drives which way building faces
     # Sample hours 6–20
     points = []
     for h in range(6, 21):

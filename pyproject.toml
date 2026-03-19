@@ -1,0 +1,24 @@
+[project]
+name = "expat-nl-mortgage-rag"
+version = "0.1.0"
+description = "RAG-based assistant for Dutch mortgages and property (expat-focused)"
+readme = "README.md"
+requires-python = ">=3.10"
+
+[tool.ruff]
+# Exclude legacy/alternate app scripts from lint so CI focuses on main app + lib + scripts + tests
+extend-exclude = [
+    "ChatApp_RAG_ollama_langchain.py",
+    "app_FastEmbed_UploadPDF_Chat.py",
+    "app_RAG_ollama_langchain.py",
+    "app_UploadPDF_Chat.py",
+    "app_phase1.py",
+    "app_wRAG.py",
+    "simple_ollama_chatbot.py",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v"

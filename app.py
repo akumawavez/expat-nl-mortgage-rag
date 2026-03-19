@@ -10,12 +10,8 @@ import json
 import os
 from pathlib import Path
 
-import dotenv
-dotenv.load_dotenv(Path(__file__).resolve().parent / ".env")
-
 import streamlit as st
 from qdrant_client import QdrantClient
-from qdrant_client.models import VectorParams, Distance
 
 from lib.provider import (
     get_llm_client,
@@ -36,8 +32,10 @@ from lib.map_ui import build_map_html, build_pydeck_map, build_pois_table_data
 from lib.sun_orientation import build_sun_orientation_html
 from lib.documents import list_documents_in_store, upsert_pdf_to_qdrant
 from lib.agents import run_orchestrator
-from lib.a2ui import parse_directives_from_text
 from lib.mcp_client import list_mcp_tools, register_default_mcp_tools
+
+import dotenv
+dotenv.load_dotenv(Path(__file__).resolve().parent / ".env")
 
 # -----------------------------------------------------------------------------
 # Config
@@ -156,8 +154,8 @@ def _render_calculator_tab() -> None:
     bid = st.number_input("Bod / aankoopprijs (€)", min_value=50000, max_value=2_000_000, value=350000, step=10000)
     eigen_inleg = st.number_input("Eigen inleg (€)", min_value=0, max_value=bid, value=35000, step=5000)
     hypotheek = bid - eigen_inleg
-    type_woning = st.selectbox("Type woning", ["Bestaande koopwoning", "Nieuwbouw", "Bouwkavel"])
-    energielabel = st.selectbox("Energielabel", ENERGIELABELS)
+    _type_woning = st.selectbox("Type woning", ["Bestaande koopwoning", "Nieuwbouw", "Bouwkavel"])
+    _energielabel = st.selectbox("Energielabel", ENERGIELABELS)
     # Simplified: no real ING formula; show placeholder outputs
     st.divider()
     st.metric("Hypotheek", f"€ {hypotheek:,}")

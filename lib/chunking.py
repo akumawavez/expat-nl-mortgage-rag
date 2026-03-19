@@ -159,7 +159,6 @@ def chunk_text_semantic(
     sections = _split_on_structure(content)
     chunks: List[str] = []
     current: List[str] = []
-    current_len = 0
 
     for section in sections:
         if not section.strip():
@@ -167,7 +166,6 @@ def chunk_text_semantic(
         candidate = "\n\n".join(current + [section]) if current else section
         if len(candidate) <= chunk_size:
             current.append(section)
-            current_len = len(candidate)
             continue
 
         # Flush current chunk
@@ -176,7 +174,6 @@ def chunk_text_semantic(
             if len(chunk) >= min_chunk_size:
                 chunks.append(chunk)
             current = []
-            current_len = 0
 
         # Oversized section: LLM split or simple split
         if (
@@ -194,7 +191,6 @@ def chunk_text_semantic(
             chunks.extend(sub_chunks)
         else:
             current = [section]
-            current_len = len(section)
 
     if current:
         chunk = "\n\n".join(current).strip()

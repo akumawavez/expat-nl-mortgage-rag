@@ -12,7 +12,6 @@ import os
 import urllib.parse
 import urllib.request
 import json
-from typing import Any
 
 NOMINATIM_URL = os.environ.get("NOMINATIM_URL", "https://nominatim.openstreetmap.org")
 OVERPASS_URL = os.environ.get("OVERPASS_URL", "https://overpass-api.de/api/interpreter")

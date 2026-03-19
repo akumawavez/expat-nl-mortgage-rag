@@ -1,5 +1,4 @@
 """Tests for lib.chunking (PDF/chunking helpers used in ingestion)."""
-import pytest
 from lib.chunking import chunk_text
 
 

@@ -21,7 +21,7 @@ if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 os.chdir(_project_root)
 
-import dotenv
+import dotenv  # noqa: E402
 dotenv.load_dotenv(_project_root / ".env")
 
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")

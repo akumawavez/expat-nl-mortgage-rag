@@ -1,5 +1,4 @@
 """Tests for lib.retrieval: RRF merge and hybrid_retrieve/vector_search behavior."""
-import pytest
 from lib.retrieval import _rrf_merge, vector_search, hybrid_retrieve
 
 
