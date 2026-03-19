@@ -17,7 +17,7 @@ This document describes traceability, transparency, and oversight for the RAG as
 
 ## Oversight and monitoring
 
-- **Retrieval quality** and **Response quality** sections in Observability surface metrics (from RAGAS/Phoenix or Langfuse when available).
+- **Retrieval quality** and **Response quality** sections in Observability surface metrics (from RAGAS or Langfuse when available).
 - **Drift indicators** (Phase 3) highlight trends in quality over time; optional `monitoring/drift_detection.py` persists scores.
 - **Prometheus /metrics** and Grafana (Phase 3) support operational monitoring (latency, errors, tool usage).
 

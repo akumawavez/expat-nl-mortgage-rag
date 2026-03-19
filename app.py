@@ -459,8 +459,8 @@ def _render_observability_tab() -> None:
         st.markdown(f"**Langfuse:** [Open dashboard]({langfuse_host})")
     else:
         st.info(
-            "**Langfuse Connection** — No Langfuse host set. Set LANGFUSE_HOST or LANGFUSE_URL in the environment to link to Langfuse. "
-            "[View Langfuse Docs](https://langfuse.com/docs)"
+            "**Langfuse connection:** No host is set. To link this app to Langfuse, set `LANGFUSE_HOST` or "
+            "`LANGFUSE_URL` in your environment or `.env` file. [View Langfuse docs](https://langfuse.com/docs)."
         )
     with st.expander("Token / price tracking"):
         st.caption("Via Langfuse callback when enabled.")
@@ -475,7 +475,7 @@ def _render_observability_tab() -> None:
     with st.expander("Retrieval quality"):
         rq = summary.get("retrieval_quality_mean")
         st.metric("Retrieval quality (mean)", f"{rq:.3f}" if rq is not None else "No data")
-        st.caption("From RAGAS/Phoenix or monitoring/drift_detection. Run scripts/run_ragas.py to populate.")
+        st.caption("From RAGAS or monitoring/drift_detection. Run scripts/run_ragas.py to populate.")
     with st.expander("Response quality"):
         rp = summary.get("response_quality_mean")
         st.metric("Response quality (mean)", f"{rp:.3f}" if rp is not None else "No data")
@@ -707,6 +707,12 @@ def _render_chat_page(top_k: int) -> None:
                 "sources": chunks,
                 "a2ui_directives": a2ui_directives,
             })
+            # Flush Langfuse so traces appear in the dashboard promptly
+            try:
+                from langfuse import get_client
+                get_client().flush()
+            except Exception:
+                pass
             st.rerun()
 
     # Right panel: Sources, Tools Used, System Status (from last assistant message)

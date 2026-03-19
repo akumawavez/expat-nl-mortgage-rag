@@ -93,6 +93,19 @@ def get_llm_client(provider_override: str | None = None) -> "OpenAI":
 
 
 def _client(base_url: str | None, api_key: str) -> "OpenAI":
+    """Return OpenAI-compatible client; use Langfuse-wrapped client when LANGFUSE keys are set for tracing."""
+    use_langfuse = (
+        os.environ.get("LANGFUSE_PUBLIC_KEY", "").strip()
+        and os.environ.get("LANGFUSE_SECRET_KEY", "").strip()
+    )
+    if use_langfuse:
+        try:
+            from langfuse.openai import OpenAI as LangfuseOpenAI
+            if base_url:
+                return LangfuseOpenAI(base_url=base_url.rstrip("/"), api_key=api_key)
+            return LangfuseOpenAI(api_key=api_key)
+        except Exception:
+            pass
     from openai import OpenAI
     if base_url:
         return OpenAI(base_url=base_url.rstrip("/"), api_key=api_key)

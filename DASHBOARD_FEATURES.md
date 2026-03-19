@@ -166,7 +166,7 @@ The **left sidebar** configures backend behavior and session:
 **Sections:**
 - **Configuration:** If `LANGFUSE_HOST` or `LANGFUSE_URL` is set in `.env`, link to Langfuse dashboard; otherwise an info message to set them.
 - **Token / price tracking:** Via Langfuse callback when enabled.
-- **Retrieval quality (expandable):** Mean retrieval quality; “No data” until RAGAS/Phoenix or monitoring scripts (e.g. `scripts/run_ragas.py`) populate it.
+- **Retrieval quality (expandable):** Mean retrieval quality; “No data” until RAGAS or monitoring scripts (e.g. `scripts/run_ragas.py`) populate it.
 - **Response quality (expandable):** Response quality (mean) and Latency p50 (ms); same “No data” until populated.
 - **Drift indicators (expandable):** Trends from `monitoring.drift_detection` when scores are recorded.
 

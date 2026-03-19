@@ -10,7 +10,7 @@ This document defines the **four-phase implementation plan** and **concrete test
 |-------|------|---------|
 | **1** | Foundation (MVP) | Single app entry point, RAG + citations, web search toggle, hybrid search + RRF, mortgage calculator, observability tab, tests, CI/CD, deployment. |
 | **2** | Location & property intelligence | Map-based nearby search (Nominatim/Overpass), OSRM enrichment, safety (CBS), Knowledge Graph tab (PyVis), optional A2UI (calculator/map directives). |
-| **3** | Advanced UX & continuous monitoring | Sun-orientation SVG, retrieval/response quality & drift (RAGAS/Phoenix/Langfuse), RAG evals pipeline, Prometheus + Grafana. |
+| **3** | Advanced UX & continuous monitoring | Sun-orientation SVG, retrieval/response quality & drift (RAGAS/Langfuse), RAG evals pipeline, Prometheus + Grafana. |
 | **4** | Multi-agent, A2A, A2UI, MCP | Specialist agents + orchestrator (A2A), full A2UI schema & renderer, MCP servers for tools, optional eval smoke in CI. |
 
 ### Quick test reference
@@ -19,7 +19,7 @@ This document defines the **four-phase implementation plan** and **concrete test
 |-------|-------------------|
 | **1** | `python scripts/ingest_docs.py` → `python scripts/test_ingestion.py` (RESULT: PASS). Single app `streamlit run app.py`: chat, citations, web search toggle, hybrid retrieval, mortgage calculator tab, observability tab. `pytest` and CI workflow pass. `DEPLOYMENT.md` and `.env.example` exist. |
 | **2** | `python scripts/test_phase2.py --check-neo4j`. App: nearby_places (map), OSRM commute/proximity, area_safety, KG tab (PyVis). Optional: agent “show calculator” / “show map” renders widgets. |
-| **3** | Sun-orientation widget in app. Observability: “Retrieval quality”, “Response quality”, “Drift indicators”. RAGAS/Phoenix evals run; Prometheus `/metrics` and Grafana dashboard documented. |
+| **3** | Sun-orientation widget in app. Observability: “Retrieval quality”, “Response quality”, “Drift indicators”. RAGAS evals run; Prometheus `/metrics` and Grafana dashboard documented. |
 | **4** | Multi-agent routing (LangGraph/LangChain), A2UI directives (calculator, map, sun, citations, safety) rendered from agent output, MCP client + tools. Optional: RAGAS subset in CI. |
 
 Details and success criteria for each phase are below.
@@ -352,8 +352,8 @@ Run from **project root**.
 ### Scope (section refs)
 
 - **Interactive sun-orientation SVG** (section 4e): tab or section for sun path vs apartment across the year (solar position, orientation, date slider); SVG or embedded HTML/JS.
-- **Continuous monitoring & responsible AI** (section 4h): retrieval accuracy and response quality metrics (from RAGAS/Phoenix samples or Langfuse); model behavior drift (input/output distributions, quality trends); responsible AI (traceability, transparency, docs). Observability tab: “Retrieval quality”, “Response quality”, “Drift indicators”; optional `monitoring/drift_detection.py` and `docs/RESPONSIBLE_AI.md`.
-- **RAG evals** (section 5): golden dataset, RAGAS script, Phoenix script; run periodically and log scores for monitoring.
+- **Continuous monitoring & responsible AI** (section 4h): retrieval accuracy and response quality metrics (from RAGAS samples or Langfuse); model behavior drift (input/output distributions, quality trends); responsible AI (traceability, transparency, docs). Observability tab: “Retrieval quality”, “Response quality”, “Drift indicators”; optional `monitoring/drift_detection.py` and `docs/RESPONSIBLE_AI.md`.
+- **RAG evals** (section 5): golden dataset, RAGAS script; run periodically and log scores for monitoring.
 - **Prometheus + Grafana** (sections 4.2–4.3): `/metrics` endpoint, Grafana dashboard for RAG (latency, tool usage, errors, retrieval quality); document setup.
 
 ### Deliverables (evidence)
@@ -361,11 +361,11 @@ Run from **project root**.
 | Deliverable | Location / Evidence |
 |-------------|----------------------|
 | Sun-orientation widget | Tab/section: sun path vs apartment; orientation; date slider; SVG or HTML/JS |
-| Retrieval quality | Observability: “Retrieval quality” (e.g. from RAGAS/Phoenix or Langfuse) |
+| Retrieval quality | Observability: “Retrieval quality” (e.g. from RAGAS or Langfuse) |
 | Response quality | Observability: “Response quality” metrics |
 | Drift indicators | Observability: “Drift indicators”; optional drift_detection.py |
 | Responsible AI docs | docs/RESPONSIBLE_AI.md (traceability, transparency) |
-| RAG evals | Golden dataset; RAGAS script; Phoenix script; periodic run and logged scores |
+| RAG evals | Golden dataset; RAGAS script; periodic run and logged scores |
 | /metrics | Prometheus-compatible endpoint (latency, tool usage, errors, retrieval quality) |
 | Grafana | Documented dashboard for RAG (latency, tools, errors, retrieval quality) |
 | *Chat response format* | Unchanged: **Tools Used** + **Assistant** + **citations** (Phase 1/2 pattern). Observability tab surfaces quality/drift for retrieval and responses. |
@@ -391,7 +391,7 @@ Run from **project root**.
 
 **Success criteria:**
 
-- **“Retrieval quality”** section (e.g. from RAGAS/Phoenix or Langfuse).
+- **“Retrieval quality”** section (e.g. from RAGAS or Langfuse).
 - **“Response quality”** section with metrics.
 - **“Drift indicators”** section (e.g. input/output distributions, quality trends).
 - Optional: `monitoring/drift_detection.py` and `docs/RESPONSIBLE_AI.md` exist.
@@ -402,13 +402,12 @@ Run from **project root**.
 
 #### Test 3.3 – RAG evals pipeline
 
-**Command:** Run RAGAS and/or Phoenix script on golden dataset (e.g. `python scripts/run_ragas.py` or similar).
+**Command:** Run RAGAS script on golden dataset (e.g. `python scripts/run_ragas.py`).
 
 **Success criteria:**
 
 - **Golden dataset** exists (e.g. questions + reference answers or context).
-- **RAGAS script** runs and produces scores (e.g. faithfulness, answer relevancy).
-- **Phoenix script** (or equivalent) runs and produces evals; scores **logged** for monitoring (e.g. to Langfuse or file).
+- **RAGAS script** runs and produces scores (e.g. faithfulness, answer relevancy); scores **logged** for monitoring (e.g. to Langfuse or file).
 
 **Proves:** RAG evals (section 5).
 
@@ -432,7 +431,7 @@ Run from **project root**.
 
 - [ ] Test 3.1 – Sun-orientation SVG (date, orientation, sun path).
 - [ ] Test 3.2 – Observability: Retrieval quality, Response quality, Drift indicators; optional drift_detection.py and RESPONSIBLE_AI.md.
-- [ ] Test 3.3 – RAG evals (golden set, RAGAS, Phoenix, logged scores).
+- [ ] Test 3.3 – RAG evals (golden set, RAGAS, logged scores).
 - [ ] Test 3.4 – /metrics endpoint and Grafana RAG dashboard documented.
 
 **Phase 3 is complete when all items above are checked and tests meet the success criteria.**
@@ -649,7 +648,7 @@ Do **all Phase 1 steps** first, then:
 Do **Phase 1 and Phase 2 steps** as needed, then:
 
 1. **Environment**
-   - Ensure Langfuse (or Phoenix) and any eval/monitoring env vars are set if used.
+   - Ensure Langfuse and any eval/monitoring env vars are set if used.
 
 2. **Run the app**
    ```bash
@@ -661,8 +660,6 @@ Do **Phase 1 and Phase 2 steps** as needed, then:
 3. **RAG evals (when implemented)**
    ```bash
    python scripts/run_ragas.py
-   # or
-   python scripts/run_phoenix_evals.py
    ```
 
 4. **Prometheus / Grafana**
