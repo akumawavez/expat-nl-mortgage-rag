@@ -11,6 +11,7 @@ import logging
 import os
 import re
 from pathlib import Path
+import base64
 
 import streamlit as st
 from qdrant_client import QdrantClient
@@ -176,7 +177,9 @@ def _tavily_search(query: str, max_results: int = 5) -> tuple[str, list[dict], l
                 if content:
                     parts.append(f"[{title}]({url})\n{content}")
                     web_sources.append({
-                        "source": f"[Web] {title}",
+                        "type": "web",
+                        "title": title,
+                        "source": title,
                         "text": content[:2000] + ("..." if len(content) > 2000 else ""),
                         "url": url,
                     })
@@ -570,6 +573,7 @@ def main() -> None:
         st.checkbox("Web search (Tavily)", value=st.session_state["web_search"], key="web_search")
         if st.button("Clear conversation", use_container_width=True):
             st.session_state["messages"] = []
+            st.session_state["pdf_preview"] = None
             st.rerun()
     # Phase 4 agents toggle removed; keep orchestrator off
     st.session_state["use_agents"] = False
@@ -608,10 +612,36 @@ def _render_chat_page(top_k: int) -> None:
     """Chat interface with optional right-hand panel for sources, tools, and status."""
     col_chat, col_panel = st.columns([3, 1])
     with col_chat:
+        if "pdf_preview" not in st.session_state:
+            st.session_state["pdf_preview"] = None
+
+        @st.cache_data(show_spinner=False)
+        def _get_pdf_base64(source: str) -> str | None:
+            from lib.documents import load_pdf_bytes_from_store
+
+            pdf_bytes = load_pdf_bytes_from_store(source)
+            if not pdf_bytes:
+                return None
+            return base64.b64encode(pdf_bytes).decode("ascii")
+
+        def _render_pdf_preview(source: str, page: int | None) -> None:
+            b64 = _get_pdf_base64(source)
+            if not b64:
+                st.info("PDF preview not available for this document (original PDF not saved during ingestion).")
+                return
+            page_num = int(page) if page else 1
+            st.caption(f"Previewing: {source} (page {page_num})")
+            html = (
+                f"<embed "
+                f"src='data:application/pdf;base64,{b64}#page={page_num}' "
+                f"type='application/pdf' width='100%' height='700px' />"
+            )
+            st.components.v1.html(html, height=720, scrolling=True)
+
         st.title(PAGE_TITLE)
         st.caption("Ask about Dutch mortgages, tax, housing. Sources and tools used are shown in the panel on the right.")
 
-        for msg in st.session_state["messages"]:
+        for msg_idx, msg in enumerate(st.session_state["messages"]):
             with st.chat_message(msg["role"]):
                 if msg["role"] == "assistant" and msg.get("tools_used"):
                     st.markdown(_format_tools_used(msg["tools_used"]) + "\n\n🤖 **Assistant:**\n\n")
@@ -619,16 +649,46 @@ def _render_chat_page(top_k: int) -> None:
                 if msg["role"] == "assistant" and msg.get("a2ui_directives"):
                     st.caption("**A2UI:** " + ", ".join(d.get("type", "") for d in msg["a2ui_directives"]))
                 if msg["role"] == "assistant" and msg.get("sources"):
-                    with st.expander("Source tracing (documents & web search used for this answer)"):
-                        for s in msg["sources"]:
+                    sources = msg.get("sources") or []
+                    with st.expander("Citations (documents + web search)"):
+                        for cite_i, s in enumerate(sources, start=1):
                             src = s.get("source", "?")
                             url = s.get("url")
+                            snippet = (s.get("text", "") or "").strip()
+                            snippet = snippet.replace("\n", " ")
+                            snippet_short = (snippet[:200] + ("..." if len(snippet) > 200 else "")) if snippet else ""
+                            page = s.get("page")
+
                             if url:
-                                link_text = src.replace("[Web] ", "") if src.startswith("[Web] ") else src
-                                st.caption(f"**Web:** [{link_text}]({url})")
-                            else:
-                                st.caption(f"**Document:** {src}")
-                            st.text(s.get("text", "")[:500] + ("..." if len(s.get("text", "")) > 500 else ""))
+                                # Web citation: short title + hyperlink.
+                                title = s.get("title") or src
+                                st.caption(f"**{cite_i}.** [{title}]({url})")
+                                if snippet_short:
+                                    st.text(snippet_short)
+                                continue
+
+                            # PDF citation: show page + short description, and provide page preview.
+                            page_label = f" (page {page})" if page else ""
+                            st.caption(f"**{cite_i}.** {src}{page_label}")
+                            if snippet_short:
+                                st.text(snippet_short)
+
+                            preview_label = f"Preview page {page}" if page else "Preview PDF"
+                            if st.button(preview_label, key=f"cit_preview_{msg_idx}_{cite_i}", use_container_width=False):
+                                st.session_state["pdf_preview"] = {
+                                    "source": src,
+                                    "page": page,
+                                }
+
+        # PDF preview for the selected citation (shown once per rerun).
+        if st.session_state.get("pdf_preview"):
+            pp = st.session_state["pdf_preview"]
+            st.markdown("#### PDF Preview")
+            if pp and pp.get("source"):
+                _render_pdf_preview(pp["source"], pp.get("page"))
+            if st.button("Close preview", key="cit_preview_close", use_container_width=False):
+                st.session_state["pdf_preview"] = None
+                st.rerun()
 
         prompt = st.chat_input("Type your message...")
         if prompt:
