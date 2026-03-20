@@ -655,12 +655,36 @@ def _render_chat_page(top_k: int) -> None:
                 return
             page_num = int(page) if page else 1
             st.caption(f"Previewing: {source} (page {page_num})")
-            html = (
-                f"<embed "
-                f"src='data:application/pdf;base64,{b64}#page={page_num}' "
-                f"type='application/pdf' width='100%' height='700px' />"
+            # Browser PDF rendering can fail on some setups. Use iframe+object fallback.
+            pdf_src = f"data:application/pdf;base64,{b64}#page={page_num}&toolbar=1&navpanes=1&scrollbar=1"
+            html = f"""
+            <div style="width:100%;height:760px">
+              <iframe src="{pdf_src}" width="100%" height="760" style="border:1px solid #334155;border-radius:8px;"></iframe>
+              <object data="{pdf_src}" type="application/pdf" width="100%" height="760" style="display:none"></object>
+            </div>
+            """
+            st.components.v1.html(html, height=780, scrolling=True)
+            st.download_button(
+                "Download PDF",
+                data=base64.b64decode(b64),
+                file_name=source,
+                mime="application/pdf",
+                key=f"dl_pdf_{source}_{page_num}",
+                use_container_width=False,
             )
-            st.components.v1.html(html, height=720, scrolling=True)
+            # Fallback content: show extracted text from selected page if PDF viewer is blocked.
+            try:
+                from pypdf import PdfReader
+                import io
+
+                reader = PdfReader(io.BytesIO(base64.b64decode(b64)))
+                idx = max(0, min(page_num - 1, len(reader.pages) - 1))
+                page_text = (reader.pages[idx].extract_text() or "").strip()
+                if page_text:
+                    st.caption("Page text fallback (shown if inline PDF preview is blocked):")
+                    st.text(page_text[:1800] + ("..." if len(page_text) > 1800 else ""))
+            except Exception:
+                pass
 
         st.title(PAGE_TITLE)
         st.caption("Ask about Dutch mortgages, tax, housing. Sources and tools used are shown in the panel on the right.")
