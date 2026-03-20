@@ -712,18 +712,24 @@ def _render_chat_page(top_k: int) -> None:
                             snippet = snippet.replace("\n", " ")
                             snippet_short = (snippet[:200] + ("..." if len(snippet) > 200 else "")) if snippet else ""
                             page = s.get("page")
+                            heading = s.get("heading")
 
                             if url:
-                                # Web citation: short title + hyperlink.
                                 title = s.get("title") or src
                                 st.caption(f"**{cite_i}.** [{title}]({url})")
                                 if snippet_short:
                                     st.text(snippet_short)
                                 continue
 
-                            # PDF citation: show page + short description, and provide page preview.
-                            page_label = f" (page {page})" if page else ""
-                            st.caption(f"**{cite_i}.** {src}{page_label}")
+                            # PDF citation: doc title → section heading → page number
+                            doc_title = src.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+                            parts = [f"**{cite_i}.** 📄 {doc_title}"]
+                            if heading:
+                                parts.append(f"§ {heading}")
+                            if page:
+                                parts.append(f"p. {page}")
+                            st.caption(" · ".join(parts))
+
                             if snippet_short:
                                 st.text(snippet_short)
 
@@ -897,7 +903,15 @@ def _render_chat_page(top_k: int) -> None:
                     link_text = src.replace("[Web] ", "") if src.startswith("[Web] ") else src
                     st.caption(f"✓ [{link_text}]({url})")
                 else:
-                    st.caption(f"✓ {src}")
+                    doc_title = src.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+                    heading = s.get("heading")
+                    page = s.get("page")
+                    label = f"✓ {doc_title}"
+                    if heading:
+                        label += f" · § {heading}"
+                    if page:
+                        label += f" · p. {page}"
+                    st.caption(label)
             if not (last_assistant.get("sources")):
                 st.caption("—")
             st.markdown("**Tools Used**")

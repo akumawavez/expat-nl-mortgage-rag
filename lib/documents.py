@@ -139,22 +139,17 @@ def _chunk_pdf_by_page(
     overlap: int,
 ) -> list[dict[str, Any]]:
     """
-    Chunk a PDF per page and preserve page metadata for citation preview.
-    Returns list of dicts: {text, page (1-based), chunk_index (0-based within doc)}.
+    Chunk a PDF per page, preserving page number, chunk_index, and section heading.
+    Delegates to lib.chunking.chunk_pdf_with_metadata for consistent metadata
+    across both single-upload and batch ingestion.
     """
-    reader = PdfReader(BytesIO(file_bytes))
-    doc_chunks: list[dict[str, Any]] = []
-    chunk_index = 0
-    for page_num, page in enumerate(reader.pages):
-        page_text = page.extract_text() or ""
-        if not page_text.strip():
-            continue
-        page_text = page_text.strip()
-        page_chunks = chunk_text_simple(page_text, chunk_size=chunk_size, overlap=overlap)
-        for ch in page_chunks:
-            doc_chunks.append({"text": ch, "page": page_num + 1, "chunk_index": chunk_index})
-            chunk_index += 1
-    return doc_chunks
+    from lib.chunking import chunk_pdf_with_metadata
+
+    return chunk_pdf_with_metadata(
+        file_bytes,
+        chunk_size=chunk_size,
+        chunk_overlap=overlap,
+    )
 
 
 def chunk_text_simple(text: str, chunk_size: int = 800, overlap: int = 150) -> list[str]:
@@ -249,6 +244,7 @@ def upsert_pdf_to_qdrant(
                     "source": file_name,
                     "page": chunk.get("page"),
                     "chunk_index": chunk.get("chunk_index"),
+                    "heading": chunk.get("heading"),
                 },
             )
         )

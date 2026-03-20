@@ -55,9 +55,9 @@ def vector_search(
         chunks.append({
             "text": hit.payload.get("text", ""),
             "source": hit.payload.get("source", ""),
-            # Optional metadata stored during ingestion for interactive citations.
             "page": hit.payload.get("page"),
             "chunk_index": hit.payload.get("chunk_index"),
+            "heading": hit.payload.get("heading"),
             "score": getattr(hit, "score", None),
         })
 
@@ -127,6 +127,7 @@ def hybrid_retrieve(
             "source": p.payload.get("source", ""),
             "page": p.payload.get("page"),
             "chunk_index": p.payload.get("chunk_index"),
+            "heading": p.payload.get("heading"),
             "score": getattr(p, "score", None),
         })
 
