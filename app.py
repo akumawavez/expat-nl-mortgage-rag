@@ -238,6 +238,7 @@ def _render_home_page() -> None:
                 st.caption(desc)
                 if st.button("Open →", key=f"home_go_{page_key}", use_container_width=True):
                     st.session_state["nav_page"] = page_key
+                    st.session_state["_nav_from_button"] = True
                     st.rerun()
     st.markdown("---")
     st.caption("Use the **sidebar** to switch sections anytime. Chat uses the knowledge base and optional web search.")
@@ -560,18 +561,15 @@ def main() -> None:
         st.session_state["use_agents"] = False
 
     nav_options = [x[0] for x in NAV_ITEMS]
-    current = st.session_state["nav_page"]
-    try:
-        nav_index = nav_options.index(current)
-    except ValueError:
-        nav_index = 0
+
+    if st.session_state.pop("_nav_from_button", False):
+        st.session_state["nav_radio"] = st.session_state["nav_page"]
 
     with st.sidebar:
         st.markdown("### 🧭 Navigate")
         chosen = st.radio(
             "Section",
             options=nav_options,
-            index=nav_index,
             format_func=lambda k: f"{next((x[1] + ' ' + x[2] for x in NAV_ITEMS if x[0] == k), k)}",
             key="nav_radio",
             label_visibility="collapsed",
