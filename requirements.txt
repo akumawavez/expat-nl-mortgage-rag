@@ -45,5 +45,5 @@ prometheus-client>=0.19.0
 fastapi>=0.100.0
 uvicorn>=0.22.0
 
-# Phase 4: Multi-agent (orchestrator in lib/agents.py; optional LangGraph later)
-# langgraph>=0.0.20
+# Phase 4: Multi-agent (lib/agents.py classic; lib/agents_graph.py LangGraph)
+langgraph>=0.2.0,<1.0

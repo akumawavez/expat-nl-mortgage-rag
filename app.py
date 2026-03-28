@@ -35,6 +35,7 @@ from lib.map_ui import build_map_html, build_pydeck_map, build_pois_table_data
 from lib.sun_orientation import build_sun_orientation_html
 from lib.documents import list_documents_in_store, upsert_pdf_to_qdrant, delete_document_from_store
 from lib.agents import run_orchestrator
+from lib.agents_graph import get_orchestrator_graph_mermaid, run_orchestrator_langgraph
 from lib.mcp_client import list_mcp_tools, register_default_mcp_tools
 
 import dotenv
@@ -56,6 +57,7 @@ NAV_ITEMS = [
     ("Knowledge Graph", "🕸️", "Knowledge Graph", "Extract and visualize entities & relations"),
     ("Mortgage Calculator", "🧮", "Mortgage Calculator", "Estimate loan, monthly payment, costs"),
     ("Map", "🗺️", "Map", "Nearby facilities and POIs on map"),
+    ("Agents", "🤖", "Agents", "Phase 4 orchestrator, MCP tools, LangGraph diagram"),
     ("Observability", "📈", "Observability", "Metrics, Langfuse, retrieval quality"),
 ]
 QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "property_docs")
@@ -477,6 +479,25 @@ def _render_location_tab() -> None:
             st.json(res)
 
 
+def _mermaid_viewer_html(diagram: str) -> str:
+    """Embed Mermaid source safely (labels may contain HTML like <p> from LangGraph)."""
+    payload = json.dumps(diagram)
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"/></head>
+<body style="margin:0;padding:12px;background:#f8fafc;">
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+const diagram = {payload};
+const el = document.createElement("pre");
+el.className = "mermaid";
+el.textContent = diagram;
+document.body.appendChild(el);
+mermaid.initialize({{ startOnLoad: false, theme: "neutral" }});
+await mermaid.run({{ nodes: [el] }});
+</script>
+</body></html>"""
+
+
 # ---------- Phase 4: Agents tab (Multi-agent, A2UI, MCP) ----------
 def _render_agents_tab() -> None:
     st.subheader("Agents (Phase 4)")
@@ -488,6 +509,18 @@ def _render_agents_tab() -> None:
     else:
         st.caption("No MCP tools registered. OSRM and others register when available.")
     st.markdown("Enable **Use Phase 4 agents** in the sidebar to route queries through the orchestrator. Responses may include A2UI directives (e.g. show calculator, show map).")
+    with st.expander("LangGraph workflow (visual)", expanded=True):
+        st.caption(
+            "Topology from LangGraph’s `draw_mermaid()`. Dashed edges are conditional routes "
+            "(next step: retrieval, location, calculator, or merge)."
+        )
+        try:
+            mmd = get_orchestrator_graph_mermaid()
+            st.components.v1.html(_mermaid_viewer_html(mmd), height=520, scrolling=True)
+            st.markdown("Copy the source into [mermaid.live](https://mermaid.live) to edit or export SVG/PNG.")
+            st.code(mmd, language="text")
+        except Exception as e:
+            st.warning(f"Could not render graph: {e}")
 
 # ---------- Sun-orientation tab (Phase 3) ----------
 def _render_sun_tab() -> None:
@@ -559,6 +592,8 @@ def main() -> None:
         st.session_state["web_search"] = False
     if "use_agents" not in st.session_state:
         st.session_state["use_agents"] = False
+    if "use_langgraph" not in st.session_state:
+        st.session_state["use_langgraph"] = os.environ.get("USE_LANGGRAPH", "").strip().lower() in ("1", "true", "yes")
 
     nav_options = [x[0] for x in NAV_ITEMS]
 
@@ -593,12 +628,26 @@ def main() -> None:
         top_k = st.slider("Retrieval chunks", 3, 20, MAX_SEARCH_RESULTS, key="top_k")
         st.caption("Controls how many retrieved chunks are sent as context. Higher values can improve recall but may add noise and latency.")
         st.checkbox("Web search (Tavily)", value=st.session_state["web_search"], key="web_search")
+        st.checkbox(
+            "Use Phase 4 agents (orchestrator)",
+            value=st.session_state["use_agents"],
+            key="use_agents",
+            help="Routes queries through retrieval, location, and calculator specialists before the LLM.",
+        )
+        st.checkbox(
+            "Use LangGraph orchestrator",
+            value=st.session_state["use_langgraph"],
+            key="use_langgraph",
+            disabled=not st.session_state.get("use_agents"),
+            help="Same routing as the classic orchestrator, implemented as a LangGraph StateGraph. Requires agents enabled.",
+        )
         if st.button("Clear conversation", use_container_width=True):
             st.session_state["messages"] = []
             st.session_state["pdf_preview"] = None
             st.rerun()
-    # Phase 4 agents toggle removed; keep orchestrator off
-    st.session_state["use_agents"] = False
+    # Do not assign st.session_state["use_agents"] / ["use_langgraph"] here: Streamlit
+    # owns those keys via the sidebar checkboxes. LangGraph runs only when both boxes
+    # are on (see chat path).
 
     page = st.session_state["nav_page"]
     valid_pages = [x[0] for x in NAV_ITEMS]
@@ -623,6 +672,9 @@ def main() -> None:
         return
     if page == "Observability":
         _render_observability_tab()
+        return
+    if page == "Agents":
+        _render_agents_tab()
         return
 
     # Chat page: main area + optional right panel (Sources, Tools Used, System Status)
@@ -797,7 +849,14 @@ def _render_chat_page(top_k: int) -> None:
                     return ctx, tc
                 def calculator_fn(q: str):
                     return "Use the Mortgage Calculator tab for Bruto maandlasten, Hypotheek, Kosten koper.", [{"tool": "calculator_agent", "args": {"query": q[:80]}}]
-                context, tool_calls, a2ui_directives, _ = run_orchestrator(prompt, retrieval_fn, location_fn, calculator_fn)
+                if st.session_state.get("use_langgraph"):
+                    context, tool_calls, a2ui_directives, _ = run_orchestrator_langgraph(
+                        prompt, retrieval_fn, location_fn, calculator_fn
+                    )
+                else:
+                    context, tool_calls, a2ui_directives, _ = run_orchestrator(
+                        prompt, retrieval_fn, location_fn, calculator_fn
+                    )
                 chunks = retrieval_chunks
             else:
                 try:
