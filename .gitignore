@@ -8,9 +8,12 @@ __pycache__
 *.pyo
 NotesToImprove.txt
 
+# PDFs
+*.pdf
+
 # Project docs (local / review)
-code_critique.pdf
-final_presentation.pdf
 EXECUTION_SUMMARY.md
 rabobank_technical_assessment.pptx
 interviewprep/
+data/pdf/
+.vscode/
