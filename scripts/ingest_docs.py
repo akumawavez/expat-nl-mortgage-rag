@@ -38,7 +38,7 @@ from pypdf import PdfReader  # noqa: E402
 from qdrant_client import QdrantClient  # noqa: E402
 from qdrant_client.models import Distance, VectorParams, PointStruct  # noqa: E402
 
-from lib.chunking import chunk_text as chunk_text_lib  # noqa: E402
+from lib.chunking import chunk_text as chunk_text_lib, chunk_pdf_with_metadata  # noqa: E402
 from lib.provider import get_llm_client, get_embedding_client  # noqa: E402
 
 
@@ -160,6 +160,10 @@ def main() -> None:
     if args.semantic:
         print("Chunking: semantic (structure + LLM for long sections).")
 
+    # Persist original PDFs for citation preview in the UI.
+    pdf_store = _project_root / "data" / "pdfs"
+    pdf_store.mkdir(parents=True, exist_ok=True)
+
     total_points = 0
     for path in doc_paths:
         try:
@@ -167,32 +171,52 @@ def main() -> None:
         except ValueError:
             rel_name = path.name
         print(f"Processing {rel_name} ...")
+
         try:
-            text = extract_text_from_pdf(path)
+            file_bytes = path.read_bytes()
         except Exception as e:
-            print(f"  Skip: {e}")
+            print(f"  Skip (read error): {e}")
             continue
-        chunks = chunk_text_lib(
-            text,
-            chunk_size=CHUNK_SIZE,
-            overlap=CHUNK_OVERLAP,
-            semantic=args.semantic,
-            openai_client=llm_client,
-            max_chunk_size=MAX_CHUNK_SIZE,
-            use_llm_for_long_sections=args.semantic,
-            ingestion_model=INGESTION_LLM_CHOICE,
-        )
-        if not chunks:
+
+        # Save a copy for UI preview
+        try:
+            (pdf_store / path.name).write_bytes(file_bytes)
+        except Exception:
+            pass
+
+        try:
+            doc_chunks = chunk_pdf_with_metadata(
+                file_bytes,
+                chunk_size=CHUNK_SIZE,
+                chunk_overlap=CHUNK_OVERLAP,
+                semantic=args.semantic,
+                openai_client=llm_client,
+                max_chunk_size=MAX_CHUNK_SIZE,
+                use_llm_for_long_sections=args.semantic,
+                ingestion_model=INGESTION_LLM_CHOICE,
+            )
+        except Exception as e:
+            print(f"  Skip (chunk error): {e}")
+            continue
+
+        if not doc_chunks:
             print(f"  No text chunks from {rel_name}, skipping.")
             continue
-        embeddings = embed_texts(embedding_client, chunks)
+        texts = [c["text"] for c in doc_chunks]
+        embeddings = embed_texts(embedding_client, texts)
         points = [
             PointStruct(
                 id=str(uuid.uuid4()),
                 vector=emb,
-                payload={"text": chunk, "source": str(rel_name)},
+                payload={
+                    "text": chunk["text"],
+                    "source": str(rel_name),
+                    "page": chunk.get("page"),
+                    "chunk_index": chunk.get("chunk_index"),
+                    "heading": chunk.get("heading"),
+                },
             )
-            for emb, chunk in zip(embeddings, chunks)
+            for emb, chunk in zip(embeddings, doc_chunks)
         ]
         qdrant.upsert(collection_name=QDRANT_COLLECTION, points=points)
         total_points += len(points)

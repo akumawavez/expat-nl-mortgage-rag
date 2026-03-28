@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import re
 import logging
-from typing import List, Optional, TYPE_CHECKING
+from io import BytesIO
+from typing import Any, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -242,3 +243,118 @@ def chunk_text(
         if start >= len(text):
             break
     return chunks
+
+
+# ---------------------------------------------------------------------------
+# Heading detection
+# ---------------------------------------------------------------------------
+
+_HEADING_RE = re.compile(
+    r"^(?:"
+    r"#{1,6}\s+.+"                                # markdown headers
+    r"|(?:Section|Chapter|Article|Part)\s+\d+.*"  # "Section 3 – Foo"
+    r"|\d+(?:\.\d+)*\.?\s+[A-Z].*"               # numbered headings like "3.1 Overview"
+    r"|[A-Z][A-Z\s,&/\-]{4,60}$"                 # ALL CAPS lines (min 5 chars)
+    r")",
+    re.MULTILINE,
+)
+
+
+def _detect_heading(line: str) -> str | None:
+    """Return the heading text if *line* looks like a section heading, else None."""
+    stripped = line.strip()
+    if not stripped or len(stripped) < 3:
+        return None
+    if _HEADING_RE.match(stripped):
+        return stripped.lstrip("#").strip()
+    return None
+
+
+def _current_heading_for_position(lines: list[str], pos: int) -> str | None:
+    """Walk backwards from *pos* to find the nearest heading."""
+    for i in range(pos, -1, -1):
+        h = _detect_heading(lines[i])
+        if h:
+            return h
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Page-aware, metadata-rich PDF chunking
+# ---------------------------------------------------------------------------
+
+def chunk_pdf_with_metadata(
+    file_bytes: bytes,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
+    semantic: bool = False,
+    openai_client: Optional["OpenAI"] = None,
+    max_chunk_size: int = DEFAULT_MAX_CHUNK_SIZE,
+    min_chunk_size: int = DEFAULT_MIN_CHUNK_SIZE,
+    use_llm_for_long_sections: bool = True,
+    ingestion_model: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """
+    Chunk a PDF while preserving page numbers and section headings.
+
+    Returns a list of dicts:
+        {text, page, chunk_index, heading}
+
+    *page* is 1-based.  *heading* is the nearest detected section heading
+    (or None).  Works for both batch ingestion and single-document upload
+    so that citations always carry rich metadata.
+    """
+    from pypdf import PdfReader
+
+    reader = PdfReader(BytesIO(file_bytes))
+    doc_chunks: list[dict[str, Any]] = []
+    chunk_index = 0
+    last_heading: str | None = None
+
+    for page_num, page in enumerate(reader.pages, start=1):
+        page_text = page.extract_text() or ""
+        if not page_text.strip():
+            continue
+        page_text = page_text.strip()
+
+        lines = page_text.splitlines()
+        for line in lines:
+            h = _detect_heading(line)
+            if h:
+                last_heading = h
+
+        if semantic:
+            text_chunks = chunk_text_semantic(
+                page_text,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                max_chunk_size=max_chunk_size,
+                min_chunk_size=min_chunk_size,
+                openai_client=openai_client,
+                use_llm_for_long_sections=use_llm_for_long_sections,
+                ingestion_model=ingestion_model,
+            )
+        else:
+            text_chunks = _simple_split(page_text, chunk_size, chunk_overlap, min_chunk_size)
+            if not text_chunks and page_text.strip():
+                text_chunks = [page_text.strip()]
+
+        for ch in text_chunks:
+            ch_lines = ch.splitlines()
+            chunk_heading = None
+            for cl in ch_lines:
+                detected = _detect_heading(cl)
+                if detected:
+                    chunk_heading = detected
+                    break
+            heading = chunk_heading or last_heading
+
+            doc_chunks.append({
+                "text": ch,
+                "page": page_num,
+                "chunk_index": chunk_index,
+                "heading": heading,
+            })
+            chunk_index += 1
+
+    return doc_chunks

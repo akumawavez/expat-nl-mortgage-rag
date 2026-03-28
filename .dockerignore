@@ -1,0 +1,32 @@
+.git
+.github
+.vscode
+.env
+.env.*
+!.env.example
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.pytest_cache
+.ruff_cache
+.mypy_cache
+
+# Large / non-runtime files
+*.pptx
+code_critique.pdf
+final_presentation.pdf
+NotesToImprove.txt
+EXECUTION_SUMMARY.md
+interviewprep/
+codedocs/
+
+# Tests (not needed in production image)
+tests/
+pytest.ini
+
+# Docker files themselves
+Dockerfile
+docker-compose*.yml

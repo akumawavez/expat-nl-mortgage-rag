@@ -72,7 +72,15 @@ def build_pyvis_html(nodes: list[dict], edges: list[dict], height: str = "500px"
     try:
         from pyvis.network import Network
     except ImportError:
-        return "<p>Install pyvis: pip install pyvis</p>"
+        return (
+            "<div style='padding:1.5rem; background:#fef3c7; border-radius:8px; border:1px solid #f59e0b;'>"
+            "<p style='margin:0 0 0.5rem 0;'><strong>Missing dependency</strong></p>"
+            "<p style='margin:0;'>The <code>pyvis</code> package is required to draw the knowledge graph. "
+            "Install it with:</p>"
+            "<pre style='margin:0.5rem 0 0 0; padding:0.5rem; background:#fff; border-radius:4px;'>pip install pyvis</pre>"
+            "<p style='margin:0.5rem 0 0 0; font-size:0.9em;'>Or from the project root: <code>pip install -r requirements.txt</code></p>"
+            "</div>"
+        )
     net = Network(height=height, directed=True)
     for n in nodes:
         net.add_node(n["id"], label=n.get("label", n["id"]))

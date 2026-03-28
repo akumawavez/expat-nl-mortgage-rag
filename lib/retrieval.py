@@ -35,15 +35,15 @@ def vector_search(
     """
     Run vector similarity search. Returns (chunks, tool_calls) for UI.
     chunks: list of {text, source, score}; tool_calls: for "Tools Used" display.
+    Uses query_points (Qdrant client 1.7+); search() was removed in newer clients.
     """
-    from qdrant_client.models import ScoredPoint
-
     try:
-        results: list[ScoredPoint] = qdrant_client.search(
+        response = qdrant_client.query_points(
             collection_name=collection_name,
-            query_vector=query_vector,
+            query=query_vector,
             limit=limit,
         )
+        results = getattr(response, "points", []) or []
     except Exception as e:
         logger.error("Vector search failed: %s", e, exc_info=True)
         return [], [{"tool": "vector_search", "args": {"error": str(e)}}]
@@ -55,6 +55,9 @@ def vector_search(
         chunks.append({
             "text": hit.payload.get("text", ""),
             "source": hit.payload.get("source", ""),
+            "page": hit.payload.get("page"),
+            "chunk_index": hit.payload.get("chunk_index"),
+            "heading": hit.payload.get("heading"),
             "score": getattr(hit, "score", None),
         })
 
@@ -76,18 +79,18 @@ def hybrid_retrieve(
     """
     Hybrid retrieval: vector search + keyword re-rank over same set, merged with RRF.
     Returns (chunks, tool_calls) for UI. tool_calls list can be shown in "Tools Used".
+    Uses query_points (Qdrant client 1.7+); search() was removed in newer clients.
     """
-    from qdrant_client.models import ScoredPoint
-
     if vector_limit is None:
         vector_limit = max(limit * 2, 30)
 
     try:
-        results: list[ScoredPoint] = qdrant_client.search(
+        response = qdrant_client.query_points(
             collection_name=collection_name,
-            query_vector=query_vector,
+            query=query_vector,
             limit=vector_limit,
         )
+        results = getattr(response, "points", []) or []
     except Exception as e:
         logger.error("Hybrid retrieve (vector) failed: %s", e, exc_info=True)
         return [], [{"tool": "hybrid_retrieve", "args": {"error": str(e)}}]
@@ -122,6 +125,9 @@ def hybrid_retrieve(
         chunks.append({
             "text": p.payload.get("text", ""),
             "source": p.payload.get("source", ""),
+            "page": p.payload.get("page"),
+            "chunk_index": p.payload.get("chunk_index"),
+            "heading": p.payload.get("heading"),
             "score": getattr(p, "score", None),
         })
 
